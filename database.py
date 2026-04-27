@@ -1,25 +1,90 @@
 import sqlite3
+import re
+import os
 from config import DB_PATH
 
+
+def score_post(post) -> int:
+    """
+    Skor kualitas post untuk menentukan urutan prioritas upload.
+
+    Prioritas (dari tertinggi):
+      1. Foto          — max 80 poin
+      2. Lokasi detail — max 30 poin  (sampai no rumah / gang / RT)
+      3. No HP         — 25 poin
+      4. Harga jelas   — 15 poin
+      5. Teks detail   — max 10 poin
+    """
+    raw_text    = post[2] or ""
+    location    = post[3] or ""
+    price       = post[4] or ""
+    contact     = post[5] or ""
+    image_paths = post[6] or ""
+
+    score = 0
+
+    # ── 1. Foto ──────────────────────────────────────── max 80 poin ─────
+    photos = [p for p in image_paths.split(",")
+              if p.strip() and os.path.exists(p.strip())]
+    if photos:
+        score += 60
+        score += min(len(photos) - 1, 4) * 5   # +5 per foto tambahan, max +20
+
+    # ── 2. Lokasi detail ─────────────────────────────── max 30 poin ─────
+    loc_combined = f"{location} {raw_text}".lower()
+    if re.search(r'\b(?:jl\.?|jalan|gang|gg\.?|blok|no\.?\s*\d|nomor\s*\d|rt\s*\d|rw\s*\d)', loc_combined):
+        score += 30           # ada alamat lengkap (jalan/gang/nomor)
+    elif "," in location:
+        score += 20           # "Sesetan, Denpasar Selatan" — sub-area + area
+    elif location and location.lower() not in ("bali", ""):
+        score += 10           # minimal ada nama area spesifik
+
+    # ── 3. No HP ─────────────────────────────────────── 25 poin ─────────
+    if re.search(r'(?:08|62|\+62)\d{7,}', f"{contact} {raw_text}"):
+        score += 25
+
+    # ── 4. Harga jelas ───────────────────────────────── 15 poin ─────────
+    if price and price.strip().lower() not in ("hubungi pemilik", ""):
+        score += 15
+
+    # ── 5. Teks detail ───────────────────────────────── max 10 poin ─────
+    tlen = len(raw_text)
+    if tlen > 300:
+        score += 10
+    elif tlen > 150:
+        score += 6
+    elif tlen > 80:
+        score += 3
+
+    return score
+
 def init_db():
-    """Buat tabel kalau belum ada."""
+    """Buat tabel kalau belum ada, dan migrate kalau perlu."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS posts (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            fb_post_id      TEXT UNIQUE,         -- ID unik postingan FB (cegah duplikat)
-            raw_text        TEXT,                -- Teks asli dari FB
-            location        TEXT,                -- Lokasi hasil extract
-            price           TEXT,                -- Harga hasil extract
-            contact         TEXT,                -- Nomor kontak
-            image_paths     TEXT,                -- Path foto (dipisah koma)
-            caption         TEXT,                -- Caption yang sudah di-generate AI
-            status          TEXT DEFAULT 'new',  -- new | captioned | posted | skipped
+            fb_post_id      TEXT UNIQUE,
+            raw_text        TEXT,
+            location        TEXT,
+            price           TEXT,
+            contact         TEXT,
+            image_paths     TEXT,
+            caption         TEXT,
+            status          TEXT DEFAULT 'new',
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            posted_at       TIMESTAMP
+            posted_at       TIMESTAMP,
+            source          TEXT DEFAULT 'facebook'
         )
     """)
+    # Migrate: tambah kolom source kalau belum ada (untuk DB lama)
+    try:
+        c.execute("ALTER TABLE posts ADD COLUMN source TEXT DEFAULT 'facebook'")
+        conn.commit()
+        print("🔄 Migrasi DB: kolom 'source' ditambahkan.")
+    except Exception:
+        pass  # kolom sudah ada
     conn.commit()
     conn.close()
     print("✅ Database siap.")
@@ -33,15 +98,17 @@ def is_duplicate(fb_post_id: str) -> bool:
     conn.close()
     return result is not None
 
-def save_post(fb_post_id, raw_text, location, price, contact, image_paths):
-    """Simpan postingan baru ke database."""
+def save_post(fb_post_id, raw_text, location, price, contact, image_paths,
+              source: str = "facebook"):
+    """Simpan postingan baru ke database. source: 'facebook' atau 'mamikos'."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO posts (fb_post_id, raw_text, location, price, contact, image_paths)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (fb_post_id, raw_text, location, price, contact, ",".join(image_paths)))
+            INSERT INTO posts (fb_post_id, raw_text, location, price, contact, image_paths, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (fb_post_id, raw_text, location, price, contact,
+              ",".join(image_paths), source))
         conn.commit()
         post_id = c.lastrowid
         print(f"💾 Tersimpan: {fb_post_id[:20]}...")
@@ -68,13 +135,33 @@ def mark_posted(post_id: int):
     conn.commit()
     conn.close()
 
-def get_pending_posts():
-    """Ambil postingan yang sudah ada caption tapi belum diposting."""
+def get_pending_posts(source: str = None):
+    """
+    Ambil postingan yang sudah ada caption tapi belum diposting.
+    source: 'facebook' | 'mamikos' | None (semua)
+    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT * FROM posts WHERE status = 'captioned' ORDER BY created_at ASC")
+    if source:
+        c.execute("""
+            SELECT id, fb_post_id, raw_text, location, price, contact,
+                   image_paths, caption, status, created_at, posted_at,
+                   COALESCE(source, 'facebook') as source
+            FROM posts WHERE status = 'captioned'
+              AND COALESCE(source, 'facebook') = ?
+            ORDER BY created_at ASC
+        """, (source,))
+    else:
+        c.execute("""
+            SELECT id, fb_post_id, raw_text, location, price, contact,
+                   image_paths, caption, status, created_at, posted_at,
+                   COALESCE(source, 'facebook') as source
+            FROM posts WHERE status = 'captioned' ORDER BY created_at ASC
+        """)
     rows = c.fetchall()
     conn.close()
+    # Urutkan berdasarkan skor kualitas — terbaik duluan
+    rows.sort(key=score_post, reverse=True)
     return rows
 
 def get_stats():

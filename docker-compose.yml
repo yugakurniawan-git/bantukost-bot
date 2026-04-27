@@ -1,0 +1,11 @@
+services:
+  bantukos-bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      # Persistent: database, foto scraping, sesi browser Facebook
+      - ./data:/app/data
+    env_file:
+      - .env
+    # Coolify akan baca CMD dari Dockerfile, tapi bisa di-override di sini:
+    # command: python main.py

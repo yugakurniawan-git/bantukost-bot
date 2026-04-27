@@ -23,9 +23,16 @@ KEYWORDS = [
     # Kata ketersediaan
     "ready", "tersedia", "available", "kosong", "slot", "unit",
     "siap huni", "siap ditempati",
-    # Lokasi Bali
+    # Lokasi Bali — area utama
     "canggu", "seminyak", "kuta", "denpasar", "jimbaran",
     "ubud", "sanur", "nusa dua", "legian",
+    # Sub-area Denpasar & sekitarnya
+    "sesetan", "renon", "gatsu", "panjer", "kesiman",
+    "padangsambian", "pemogan", "monang maning", "imam bonjol",
+    "bypass", "kerobokan", "berawa", "pererenan", "mengwi",
+    "tabanan", "gianyar", "sukawati", "ketewel", "tohpati",
+    "denbar", "densel", "denut", "denbarat", "denpasar barat",
+    "denpasar selatan", "denpasar utara", "denpasar timur",
 ]
 
 # Kata kunci yang menandakan postingan MENAWARKAN kos (harus ada minimal 1)
@@ -69,7 +76,11 @@ MAX_IMAGES_PER_POST = 5  # Instagram max 10, tapi kita batasi 5
 
 # ─── Jadwal ───────────────────────────────────────────
 SCRAPE_INTERVAL_MINUTES  = 30   # scraping tiap 30 menit
-POST_INTERVAL_HOURS      = 3    # posting tiap 3 jam
+POST_INTERVAL_HOURS      = 6    # posting tiap 6 jam (~4 post/hari — aman dari spam IG)
+
+# ─── Batas posting per siklus ──────────────────────────
+# Makin kecil = lebih aman. 2 per 6 jam = ~8 post/hari (batas aman IG ~20/hari)
+MAX_POSTS_PER_RUN        = 2
 
 # ─── Filter Harga (opsional, 0 = tidak difilter) ──────
 MIN_PRICE = 0

@@ -6,9 +6,10 @@ import hashlib
 from playwright.sync_api import sync_playwright
 from config import FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR
 from database import is_duplicate, save_post
+from ocr import ocr_image, is_kos_flyer
 
-MAX_POSTS_PER_GROUP  = 10
-MAX_POSTS_PER_CYCLE  = 30
+MAX_POSTS_PER_GROUP  = 25
+MAX_POSTS_PER_CYCLE  = 60
 MAX_COMMENTS_PER_POST = 5   # max listing komentar yang diambil per post pencarian
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
@@ -78,15 +79,44 @@ def extract_contact(text: str) -> str:
     return match.group(0) if match else ""
 
 def extract_location(text: str) -> str:
-    areas = [
-        "Canggu", "Seminyak", "Kuta", "Legian", "Denpasar",
-        "Jimbaran", "Nusa Dua", "Ubud", "Sanur", "Uluwatu",
-        "Pecatu", "Berawa", "Pererenan", "Mengwi", "Tabanan",
-        "Kerobokan", "Kedonganan", "Bukit", "Badung"
+    """
+    Ambil lokasi bersih dari teks — return area + sub-area kalau ada.
+    Contoh: "Sesetan, Denpasar Selatan" bukan seluruh kalimat.
+    """
+    # Sub-area lebih spesifik — cek dulu sebelum area umum
+    sub_areas = [
+        "Sesetan", "Renon", "Panjer", "Kesiman", "Pemogan", "Padangsambian",
+        "Monang Maning", "Imam Bonjol", "Tohpati", "Ketewel",
+        "Berawa", "Pererenan", "Kerobokan", "Kedonganan",
+        "Pecatu", "Uluwatu", "Bukit", "Bypass",
+        "Tegallalang", "Sukawati", "Gianyar",
+        "Mengwi", "Tabanan",
     ]
-    for area in areas:
-        if area.lower() in text.lower():
-            return area
+    main_areas = [
+        "Denpasar Barat", "Denpasar Selatan", "Denpasar Utara", "Denpasar Timur",
+        "Canggu", "Seminyak", "Kuta", "Legian",
+        "Jimbaran", "Nusa Dua", "Ubud", "Sanur",
+        "Denpasar", "Badung",
+    ]
+
+    t = text.lower()
+    found_sub  = [a for a in sub_areas  if a.lower() in t]
+    found_main = [a for a in main_areas if a.lower() in t]
+
+    if found_sub and found_main:
+        # Cek apakah sub dan main disebutkan berdekatan (dalam 50 char)
+        sub  = found_sub[0]
+        main = found_main[0]
+        pos_sub  = t.find(sub.lower())
+        pos_main = t.find(main.lower())
+        if abs(pos_sub - pos_main) < 60:
+            return f"{sub}, {main}"
+        # Kalau berjauhan, pakai yang lebih spesifik (sub_area)
+        return sub
+    if found_sub:
+        return found_sub[0]
+    if found_main:
+        return found_main[0]
     return "Bali"
 
 # ─── Image Extraction ─────────────────────────────────
@@ -162,29 +192,36 @@ def get_post_photo_urls(page, post_element) -> list:
 
     return photo_urls if photo_urls else []
 
-def process_post_images(page, post_element, post_id: str) -> list:
-    """Ambil dan download foto konten dari satu postingan."""
+def process_post_images(page, post_element, post_id: str) -> tuple:
+    """
+    Ambil dan download foto konten dari satu postingan.
+    Return (saved_paths, ocr_text) — ocr_text diisi kalau foto ada teks (flyer).
+    """
     img_urls = get_post_photo_urls(page, post_element)
 
     if not img_urls:
         print("   📷 Tidak ada foto konten ditemukan.")
-        return []
+        return [], ""
 
     saved = []
+    ocr_texts = []
     for i, url in enumerate(img_urls):
         name = f"{hashlib.md5(post_id.encode()).hexdigest()[:8]}_{i}.jpg"
         path = os.path.join(IMAGES_DIR, name)
-        if download_image_via_playwright(page, url, path):
+        ok = download_image_via_playwright(page, url, path)
+        if not ok:
+            ok = download_image_via_playwright(page, url, path)
+        if ok:
             saved.append(path)
             print(f"   📷 Foto {i+1} OK ({os.path.getsize(path)//1024}KB): {name}")
-        else:
-            # Coba URL original kalau resolusi tinggi gagal
-            orig_url = img_urls[i]
-            if download_image_via_playwright(page, orig_url, path):
-                saved.append(path)
-                print(f"   📷 Foto {i+1} OK (original): {name}")
+            # OCR hanya pada foto pertama (biasanya yang paling relevan)
+            if i == 0:
+                ocr_text = ocr_image(path)
+                if ocr_text and is_kos_flyer(ocr_text):
+                    print(f"   🔡 OCR flyer: {ocr_text[:80].strip()!r}")
+                    ocr_texts.append(ocr_text)
 
-    return saved
+    return saved, "\n".join(ocr_texts)
 
 # ─── Script Tag Fallback ──────────────────────────────
 
@@ -294,11 +331,12 @@ def get_post_urls_from_feed(page) -> list:
 
 def scrape_comments_for_listings(page, post_url: str) -> list:
     """
-    Buka satu post Facebook, load komentarnya, lalu extract
-    komentar yang merupakan *penawaran* kos (bukan pencarian).
+    Buka satu post Facebook, extract:
+    1. Isi post UTAMA (kalau itu listing kos langsung)
+    2. Komentar yang merupakan penawaran kos
     Returns list of (None, text, img_urls).
     """
-    print(f"      💬 Buka komentar: {post_url[-40:]}")
+    print(f"      💬 Buka post: {post_url[-40:]}")
     try:
         page.goto(post_url, wait_until="domcontentloaded", timeout=25000)
         time.sleep(3)
@@ -317,34 +355,59 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
         except Exception:
             pass
 
-    # Scroll ringan supaya komentar ter-load ke script tag
+    # Scroll supaya semua konten ter-load
     for _ in range(8):
         page.evaluate("window.scrollBy(0, 500)")
         time.sleep(1.2)
 
-    # Extract semua teks dari script tags
+    results = []
+    main_post_saved = False
+
+    # ── Coba ambil post utama via DOM dulu (lebih reliable untuk video post) ──
+    try:
+        articles = page.query_selector_all('div[role="article"]')
+        for art in articles:
+            txt = page.evaluate("(el) => el.innerText || ''", art).strip()
+            if not txt or len(txt) < 30:
+                continue
+            # Artikel pertama yang cukup panjang di halaman post = post utama
+            if not main_post_saved and len(txt) > 50:
+                # Cek apakah ini relevan (keyword atau harga)
+                if contains_keyword(txt) or has_offering_signal(txt):
+                    if not is_seeking_post(txt):
+                        img_urls = get_post_photo_urls(page, art)
+                        print(f"         📄 Post utama (DOM): {txt[:60].strip()!r}")
+                        results.append((None, txt[:2000], img_urls))
+                        main_post_saved = True
+                        break
+    except Exception as e:
+        print(f"         ⚠️ DOM extract gagal: {e}")
+
+    # ── Fallback + komentar via script tags ───────────────────────────────────
     all_entries = _extract_from_scripts(page)
 
-    # Pisahkan: ambil hanya komentar yang tampak seperti listing kos
-    # (bukan post asli / pencarian)
-    listings = []
     for entry in all_entries:
         _, text, img_urls = entry
-        # Skip kalau teks adalah post pencarian
+        if not text or len(text) < 20:
+            continue
         if is_seeking_post(text):
             continue
-        # Skip kalau tidak ada keyword kos
         if not contains_keyword(text):
             continue
-        # Komentar biasanya pendek-medium; skip yang sangat pendek
-        if len(text) < 20:
-            continue
-        listings.append((None, text, img_urls))
-        if len(listings) >= MAX_COMMENTS_PER_POST:
+
+        if not main_post_saved:
+            print(f"         📄 Post utama (JSON): {text[:60].strip()!r}")
+            results.append((None, text, img_urls))
+            main_post_saved = True
+        else:
+            if has_offering_signal(text) and len(text) >= 30:
+                results.append((None, text, img_urls))
+
+        if len(results) >= MAX_COMMENTS_PER_POST + 1:
             break
 
-    print(f"         📋 {len(listings)} komentar listing ditemukan")
-    return listings
+    print(f"         📋 {len(results)} entry (post+komentar) ditemukan")
+    return results
 
 
 # ─── Main Scraper ──────────────────────────────────────
@@ -431,19 +494,43 @@ def scrape_groups():
                 # Facebook pakai virtual scroll: artikel hanya ada di DOM
                 # saat sedang terlihat di viewport. Jadi kita harus collect
                 # sambil scroll, bukan setelah balik ke atas.
-                print("   📜 Progressive scroll & collect (25 langkah)...")
-                time.sleep(3)
+                print("   📜 Progressive scroll & collect (40 langkah)...")
+                time.sleep(4)
 
                 comment_patterns = ["Suka Balas Bagikan", "Like · Reply", "Balas Bagikan",
                                      "Like\nReply", "Suka\nBalas"]
-                seen_keys = set()   # dedup berdasarkan 120 char pertama teks
-                collected = {}      # key -> (element, text)
+                seen_keys  = set()   # dedup artikel
+                seen_urls  = set()   # dedup URL post
+                collected  = {}      # key -> (element, text)
+                feed_urls_live = []  # kumpulkan URL post sepanjang scroll
+                no_new_streak  = 0
+                MIN_SCROLLS = 12     # minimal scroll sebelum boleh early-stop
 
-                for step in range(25):
-                    # Tunggu sebentar biar React render artikel yang masuk viewport
-                    time.sleep(random.uniform(2.0, 3.0))
+                for step in range(40):
+                    time.sleep(random.uniform(1.8, 2.8))
+
+                    # Kumpulkan URL post selama scroll (lebih banyak = lebih banyak Pass 2)
+                    new_urls = page.evaluate("""
+                        () => {
+                            const seen = new Set();
+                            const out  = [];
+                            for (const a of document.querySelectorAll(
+                                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="]')) {
+                                let h = a.href || '';
+                                if (!h.includes('story_fbid=')) h = h.split('?')[0];
+                                if (h && !seen.has(h)) { seen.add(h); out.push(h); }
+                                if (out.length >= 80) break;
+                            }
+                            return out;
+                        }
+                    """)
+                    for u in (new_urls or []):
+                        if u not in seen_urls:
+                            seen_urls.add(u)
+                            feed_urls_live.append(u)
 
                     arts = page.query_selector_all('div[role="article"]')
+                    new_this_step = 0
                     for art in arts:
                         try:
                             txt = page.evaluate("(el) => el.innerText || ''", art).strip()
@@ -455,20 +542,38 @@ def scrape_groups():
                             if key not in seen_keys:
                                 seen_keys.add(key)
                                 collected[key] = (art, txt)
+                                new_this_step += 1
                                 print(f"      📌 [{step}] {txt[:60].strip()!r}")
                         except Exception:
                             continue
+
+                    if new_this_step == 0:
+                        no_new_streak += 1
+                    else:
+                        no_new_streak = 0
+
+                    print(f"      [scroll {step+1}] articles={len(collected)} urls={len(feed_urls_live)}")
 
                     if len(collected) >= MAX_POSTS_PER_GROUP:
                         print(f"   ✅ Sudah {len(collected)} postingan, stop scroll.")
                         break
 
-                    page.evaluate("window.scrollBy(0, 600)")
+                    # Early-stop hanya setelah minimum scroll DAN ada artikel sebelumnya
+                    if step >= MIN_SCROLLS and no_new_streak >= 8 and len(collected) > 0:
+                        print(f"   ⏹️ Tidak ada artikel baru setelah 8 langkah, stop.")
+                        break
+
+                    page.evaluate("window.scrollBy(0, 900)")
 
                 posts = list(collected.values())
 
-                # ── Ambil URL post dari feed (untuk comment scraping nanti) ────
-                feed_post_urls = get_post_urls_from_feed(page)
+                # ── Gabungkan URL dari scroll live + scan akhir ────────────────
+                extra_urls = get_post_urls_from_feed(page)
+                for u in extra_urls:
+                    if u not in seen_urls:
+                        seen_urls.add(u)
+                        feed_urls_live.append(u)
+                feed_post_urls = feed_urls_live
                 print(f"   🔗 URL post ditemukan di feed: {len(feed_post_urls)}")
 
                 # ── Fallback: parse script tag JSON ───────────────────────────
@@ -505,18 +610,25 @@ def scrape_groups():
                         return False
                     if is_seeking_post(text):
                         return False
-                    # Komentar wajib punya sinyal tawaran yang jelas + cukup panjang
+                    # Komentar/post via Pass 2: wajib punya sinyal penawaran
                     if require_offering:
                         if not has_offering_signal(text):
                             return False
-                        # Listing kos di komentar umumnya >= 60 char (ada alamat, harga, dll)
-                        if len(text) < 60:
+                        # Min length: 30 char cukup (listing singkat seperti "Sesetan. 1jt.")
+                        if len(text) < 30:
                             return False
-                        # Harus ada kata kunci KOS yang spesifik (bukan sekedar lokasi)
+                        # Kalau contains_keyword sudah lolos (kos/lokasi/dll),
+                        # kos_re tidak wajib lagi — hindari false negative
                         kos_re = re.compile(r'\b(?:kos|kost|kontrakan|kamar|sewa|ngekos|'
                                             r'disewakan|tersedia|available|kosong|siap huni)\b',
                                             re.IGNORECASE)
-                        if not kos_re.search(text):
+                        # Wajib kos_re HANYA kalau tidak ada keyword lokasi spesifik
+                        loc_re = re.compile(
+                            r'\b(?:sesetan|renon|gatsu|sanur|kuta|canggu|seminyak|denpasar|'
+                            r'ubud|jimbaran|kerobokan|berawa|mengwi|tabanan|bypass|panjer|'
+                            r'kesiman|pemogan|padangsambian|monang|imam bonjol|tohpati)\b',
+                            re.IGNORECASE)
+                        if not kos_re.search(text) and not loc_re.search(text):
                             return False
 
                     post_id = hashlib.md5(text[:200].encode()).hexdigest()
@@ -528,8 +640,9 @@ def scrape_groups():
                     location = extract_location(text)
 
                     img_paths = []
+                    ocr_text  = ""
                     if post_el is not None:
-                        img_paths = process_post_images(page, post_el, post_id)
+                        img_paths, ocr_text = process_post_images(page, post_el, post_id)
                     elif extra_img_urls:
                         for i, url in enumerate(extra_img_urls[:5]):
                             name = f"{hashlib.md5(post_id.encode()).hexdigest()[:8]}_{i}.jpg"
@@ -537,8 +650,19 @@ def scrape_groups():
                             if download_image_via_playwright(page, url, path):
                                 img_paths.append(path)
                                 print(f"   📷 Foto {i+1} OK ({os.path.getsize(path)//1024}KB): {name}")
+                                # OCR pada foto pertama kalau teks post pendek (flyer)
+                                if i == 0 and len(text) < 80:
+                                    ot = ocr_image(path)
+                                    if ot and is_kos_flyer(ot):
+                                        ocr_text = ot
+                                        print(f"   🔡 OCR flyer: {ot[:80].strip()!r}")
 
-                    saved_id = save_post(post_id, text[:2000], location, price, contact, img_paths)
+                    # Gabungkan teks post + OCR kalau ada
+                    final_text = text
+                    if ocr_text and len(ocr_text) > len(text):
+                        final_text = text + "\n\n[dari gambar]\n" + ocr_text
+
+                    saved_id = save_post(post_id, final_text[:2000], location, price, contact, img_paths)
                     if saved_id:
                         total_new += 1
                         group_new += 1
@@ -567,9 +691,9 @@ def scrape_groups():
 
                 # ── Pass 2: scrape komentar dari URL post (seeking post → reply) ─
                 if feed_post_urls and total_new < MAX_POSTS_PER_CYCLE:
-                    print(f"\n   💬 Pass 2: cek komentar dari {min(len(feed_post_urls), 15)} post...")
+                    print(f"\n   💬 Pass 2: cek komentar dari {min(len(feed_post_urls), 40)} post...")
                     checked = 0
-                    for post_url in feed_post_urls[:15]:
+                    for post_url in feed_post_urls[:40]:
                         if group_new >= MAX_POSTS_PER_GROUP or total_new >= MAX_POSTS_PER_CYCLE:
                             break
                         try:
