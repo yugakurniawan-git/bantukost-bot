@@ -106,7 +106,7 @@ def _upload_one_post(post) -> bool:
             print(f"   ✅ {os.path.basename(target)} → OK")
 
     caption_with_id = caption + f"\n\n📋 ID: BK-{post_id}"
-    return post_to_instagram(post_id, public_urls, caption_with_id)
+    return post_to_instagram(post_id, public_urls, caption_with_id)  # True | False | None
 
 
 def run_posting(max_posts: int = 1, source: str = None):
@@ -135,9 +135,12 @@ def run_posting(max_posts: int = 1, source: str = None):
     for i, post in enumerate(batch):
         src_tag = post[11] if len(post) > 11 else "?"
         print(f"\n[{i+1}/{len(batch)}] Post ID {post[0]} [{src_tag}] — {post[3][:35]}")
-        ok = _upload_one_post(post)
-        if ok:
+        result = _upload_one_post(post)
+        if result is True:
             uploaded += 1
+        elif result is None:
+            print("⏳ Rate limit — menghentikan siklus posting, akan retry di siklus berikutnya.")
+            break
         if i < len(batch) - 1:
             time.sleep(5)
 

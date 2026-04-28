@@ -18,10 +18,15 @@ cloudinary.config(
 
 GRAPH_URL = "https://graph.instagram.com/v21.0"
 
-def upload_single_photo(image_url: str, caption: str) -> bool:
+def _is_rate_limited(response: dict) -> bool:
+    err = response.get("error", {})
+    return err.get("code") == 4 or err.get("error_subcode") == 2207051
+
+
+def upload_single_photo(image_url: str, caption: str):
     """
     Upload 1 foto ke Instagram via Meta Graph API.
-    image_url harus publicly accessible (bukan path lokal).
+    Return: True = sukses, False = error, None = rate limited (stop batch).
     """
     # Step 1: Buat media container
     res = requests.post(
@@ -34,13 +39,15 @@ def upload_single_photo(image_url: str, caption: str) -> bool:
     )
     data = res.json()
     if "id" not in data:
+        if _is_rate_limited(data):
+            print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
+            return None
         print(f"❌ Gagal buat container: {data}")
         return False
 
     container_id = data["id"]
     print(f"   📦 Container ID: {container_id}")
 
-    # Tunggu sebentar biar Meta proses gambarnya
     time.sleep(5)
 
     # Step 2: Publish
@@ -55,13 +62,16 @@ def upload_single_photo(image_url: str, caption: str) -> bool:
     if "id" in result:
         print(f"   ✅ Berhasil publish! Post ID: {result['id']}")
         return True
-    else:
-        print(f"   ❌ Gagal publish: {result}")
-        return False
+    if _is_rate_limited(result):
+        print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
+        return None
+    print(f"   ❌ Gagal publish: {result}")
+    return False
 
-def upload_carousel(image_urls: list, caption: str) -> bool:
+def upload_carousel(image_urls: list, caption: str):
     """
     Upload carousel (banyak foto) ke Instagram.
+    Return: True = sukses, False = error, None = rate limited (stop batch).
     """
     # Step 1: Buat container untuk tiap foto
     item_ids = []
@@ -78,6 +88,9 @@ def upload_carousel(image_urls: list, caption: str) -> bool:
         if "id" in data:
             item_ids.append(data["id"])
             print(f"   📷 Item container: {data['id']}")
+        elif _is_rate_limited(data):
+            print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
+            return None
         time.sleep(2)
 
     if not item_ids:
@@ -96,6 +109,9 @@ def upload_carousel(image_urls: list, caption: str) -> bool:
     )
     carousel_data = res2.json()
     if "id" not in carousel_data:
+        if _is_rate_limited(carousel_data):
+            print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
+            return None
         print(f"❌ Gagal buat carousel: {carousel_data}")
         return False
 
@@ -114,9 +130,11 @@ def upload_carousel(image_urls: list, caption: str) -> bool:
     if "id" in result:
         print(f"   ✅ Carousel berhasil! Post ID: {result['id']}")
         return True
-    else:
-        print(f"   ❌ Gagal publish carousel: {result}")
-        return False
+    if _is_rate_limited(result):
+        print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
+        return None
+    print(f"   ❌ Gagal publish carousel: {result}")
+    return False
 
 def post_to_instagram(post_id: int, image_urls: list, caption: str) -> bool:
     """
@@ -133,16 +151,15 @@ def post_to_instagram(post_id: int, image_urls: list, caption: str) -> bool:
         print("⚠️ Tidak ada foto, skip upload.")
         return False
 
-    success = False
     if len(image_urls) == 1:
-        success = upload_single_photo(image_urls[0], caption)
+        result = upload_single_photo(image_urls[0], caption)
     else:
-        success = upload_carousel(image_urls, caption)
+        result = upload_carousel(image_urls, caption)
 
-    if success:
+    if result is True:
         mark_posted(post_id)
 
-    return success
+    return result  # True | False | None
 
 def upload_to_cloudinary(image_path: str) -> str:
     """
