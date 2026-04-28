@@ -466,6 +466,11 @@ def scrape_groups():
 
                 # Handle login
                 if "login" in page.url or "checkpoint" in page.url:
+                    if is_headless:
+                        print("❌ Session Facebook expired atau ditolak (IP server berbeda).")
+                        print("   Di lokal: python3 facebook.py --export-session")
+                        print("   Lalu: scp data/fb_session.json root@server:/data/bantukos/fb_session.json")
+                        return
                     print("⚠️ Facebook minta login manual...")
                     print("   Login di browser yang terbuka, lalu tekan Enter.")
                     input()
