@@ -416,12 +416,28 @@ def scrape_groups():
     print("\n🚀 Mulai scraping Facebook Groups...")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir="data/browser_session",
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-            viewport={"width": 1280, "height": 800},
-        )
+        session_json = "data/fb_session.json"
+        use_session_file = os.path.exists(session_json) and not os.path.exists("data/browser_session/Default")
+
+        if use_session_file:
+            # Mode server/Docker: pakai storage_state JSON yang kecil
+            print(f"   🔑 Muat session dari {session_json}")
+            _browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            )
+            browser = _browser.new_context(
+                storage_state=session_json,
+                viewport={"width": 1280, "height": 800},
+            )
+        else:
+            # Mode lokal: pakai persistent user_data_dir (bisa login manual)
+            browser = p.chromium.launch_persistent_context(
+                user_data_dir="data/browser_session",
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport={"width": 1280, "height": 800},
+            )
         page = browser.new_page()
         total_new = 0
 
@@ -445,6 +461,12 @@ def scrape_groups():
                     input()
                     page.goto(group_url.rstrip("/"), wait_until="domcontentloaded", timeout=30000)
                     time.sleep(4)
+                    # Simpan session ke JSON kecil — untuk deploy berikutnya
+                    try:
+                        browser.storage_state(path="data/fb_session.json")
+                        print("   💾 Session disimpan ke data/fb_session.json")
+                    except Exception:
+                        pass
 
                 if "groups" not in page.url:
                     print("   ⚠️ Tidak bisa masuk grup, skip.")
