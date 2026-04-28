@@ -1,5 +1,8 @@
 FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
+# Paksa Python flush output langsung — agar log muncul di Coolify
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install Python deps
