@@ -416,11 +416,14 @@ def scrape_groups():
     print("\n🚀 Mulai scraping Facebook Groups...")
 
     with sync_playwright() as p:
-        session_json = "data/fb_session.json"
-        use_session_file = os.path.exists(session_json) and not os.path.exists("data/browser_session/Default")
+        import sys as _sys
+        session_json  = "data/fb_session.json"
+        has_local_dir = os.path.exists("data/browser_session/Default")
+        # Headless kalau tidak ada display (server/Docker) — macOS tidak butuh DISPLAY
+        is_headless   = not bool(os.environ.get("DISPLAY")) and _sys.platform != "darwin"
 
-        if use_session_file:
-            # Mode server/Docker: pakai storage_state JSON yang kecil
+        if os.path.exists(session_json):
+            # Mode server: pakai storage_state JSON (2KB, hasil export dari lokal)
             print(f"   🔑 Muat session dari {session_json}")
             _browser = p.chromium.launch(
                 headless=True,
@@ -430,14 +433,21 @@ def scrape_groups():
                 storage_state=session_json,
                 viewport={"width": 1280, "height": 800},
             )
-        else:
+        elif has_local_dir:
             # Mode lokal: pakai persistent user_data_dir (bisa login manual)
+            print("   🖥️ Pakai browser_session lokal")
             browser = p.chromium.launch_persistent_context(
                 user_data_dir="data/browser_session",
-                headless=False,
+                headless=is_headless,
                 args=["--disable-blink-features=AutomationControlled"],
                 viewport={"width": 1280, "height": 800},
             )
+        else:
+            print("❌ Session Facebook tidak ditemukan!")
+            print("   Jalankan dulu di lokal: python3 facebook.py")
+            print("   Lalu upload: scp data/fb_session.json root@server:/data/bantukos/fb_session.json")
+            return
+
         page = browser.new_page()
         total_new = 0
 
