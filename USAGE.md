@@ -78,6 +78,47 @@ ID kos tertera di setiap caption Instagram dengan format `📋 ID: BK-34`.
 
 ---
 
+## Export Listing untuk TikTok (Manual Posting)
+
+Buat folder per listing — tiap folder berisi foto + `info.txt` (caption, harga, no HP).
+
+| Command | Keterangan |
+|---------|-----------|
+| `python3 export.py` | Export semua listing (captioned + posted) |
+| `python3 export.py captioned` | Hanya listing yang belum dipost ke IG |
+| `python3 export.py posted` | Hanya listing yang sudah dipost ke IG |
+| `python3 export.py 34` | Export 1 listing by ID |
+
+Hasil tersimpan di folder `data/export/` (masuk ke volume, aman dari restart):
+```
+data/export/
+  BK-34-Sesetan/
+    foto_1.jpg
+    foto_2.jpg
+    info.txt   ← lokasi, harga, no HP, caption siap paste
+  BK-41-Kuta/
+    foto_1.jpg
+    info.txt
+```
+
+**Cara jalankan dari server:**
+```bash
+# Jalankan export di dalam container
+docker exec -it 1771 python3 export.py captioned
+
+# Download hasil export ke laptop
+scp -r root@SERVER_IP:/data/bantukos/export/ ~/Desktop/bantukos-tiktok/
+```
+
+**Cara post ke TikTok:**
+1. Buka folder `BK-XX-.../` di laptop
+2. Di TikTok → **+** → **Upload** → pilih tab **Image**
+3. Pilih semua foto dari folder itu
+4. Copy caption dari `info.txt` → paste ke TikTok
+5. Post
+
+---
+
 ## Generate Caption Manual
 
 Kalau ada post `new` yang captionnya belum di-generate:
@@ -105,25 +146,92 @@ python3 caption.py
 
 ### Persiapan pertama (sekali saja)
 
-**1. Login Facebook di laptop lokal terlebih dulu:**
+**1. Export session Facebook dari laptop:**
 ```bash
-python3 facebook.py   # biarkan browser terbuka, login manual kalau diminta
+python3 facebook.py --export-session
 ```
-Setelah login berhasil, session tersimpan di `data/browser_session/`. Folder ini yang nanti di-upload ke server.
+Browser Chromium terbuka → login Facebook di sana → balik ke terminal → tekan Enter.
+Session tersimpan di `data/fb_session.json` (~2KB).
 
-**2. Buat file `.env` dari template:**
+**2. Upload session ke server:**
+```bash
+scp data/fb_session.json root@SERVER_IP:/data/bantukos/fb_session.json
+```
+
+**3. Buat file `.env` dari template:**
 ```bash
 cp .env.example .env
 # isi semua API key di .env
 ```
 
-**3. Upload ke Coolify:**
+**4. Upload ke Coolify:**
 - Push repo ke GitHub
 - Di Coolify: New Resource → Docker Compose → pilih repo
-- Tambahkan semua isi `.env` sebagai Environment Variables di Coolify
-- Set volume mount: `/app/data` → persistent storage agar database & foto tidak hilang saat redeploy
+- Tambahkan semua isi `.env` sebagai Environment Variables di Coolify (termasuk `PYTHONUNBUFFERED=1`)
+- Set volume mount: source `/data/bantukos` → destination `/app/data`
 
-**4. Deploy** — Coolify otomatis build dan jalankan. Bot langsung scrape + posting sesuai jadwal.
+**5. Deploy** — Coolify build dan jalankan. Bot langsung scrape + posting sesuai jadwal.
+
+### Memantau Proses Scraping di Server
+
+**1. Lihat log real-time di Coolify:**
+- Buka Coolify → pilih service `bantukos-bot` → tab **Logs**
+- Log muncul langsung saat bot scraping/posting
+
+**2. Lihat log via SSH:**
+```bash
+# Sambung ke server
+ssh root@SERVER_IP
+
+# Cari nama container dulu
+docker ps
+# Lihat kolom NAMES paling kanan — yang ada "python main.py" itu botnya
+# Bisa pakai 4 huruf pertama CONTAINER ID, contoh: 1771
+
+# Stream log real-time (keluar dengan Ctrl+C)
+docker logs -f --tail=100 1771
+```
+
+**3. Cek status database (berapa post terkumpul):**
+```bash
+docker exec -it 1771 python3 -c "
+from database import get_stats
+get_stats()
+"
+```
+
+**4. Trigger scraping manual (tanpa tunggu jadwal):**
+```bash
+docker exec -it 1771 python3 facebook.py
+```
+
+**5. Trigger upload manual:**
+```bash
+docker exec -it 1771 python3 facebook.py post
+```
+
+**Yang muncul di log saat scraping berjalan:**
+```
+🔵 FACEBOOK — Scraping
+Grup 1/2: https://www.facebook.com/groups/...
+  ✅ 14 post baru ditemukan
+Grup 2/2: https://www.facebook.com/groups/...
+  ✅ 8 post baru ditemukan
+✨ Total: 22 post baru | 0 duplikat dilewati
+```
+
+---
+
+### Session Facebook expired
+
+Kalau di log muncul `Session Facebook expired`:
+```bash
+# Di laptop lokal
+python3 facebook.py --export-session
+scp data/fb_session.json root@202.155.18.49:/data/bantukos/fb_session.json
+P:/data/bantukos/fb_session.json
+# Restart container di Coolify (tidak perlu rebuild)
+```
 
 ### Jadwal default (bisa diubah di `config.py`)
 
