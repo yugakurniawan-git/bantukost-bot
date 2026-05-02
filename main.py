@@ -58,7 +58,10 @@ def _upload_one_post(post) -> bool:
         return False
 
     # Siapkan foto
-    image_paths = [p for p in image_paths_str.split(",") if p and os.path.exists(p)] if image_paths_str else []
+    # dict.fromkeys deduplikasi sambil jaga urutan — cegah carousel dengan slide identik
+    image_paths = list(dict.fromkeys(
+        p for p in (image_paths_str or "").split(",") if p.strip() and os.path.exists(p.strip())
+    ))
 
     # ── Mamikos: prepend info card branded sebagai slide pertama ──────────
     if source == "mamikos":
