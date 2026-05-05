@@ -63,8 +63,10 @@ def upload_single_photo(image_url: str, caption: str):
         print(f"   ✅ Berhasil publish! Post ID: {result['id']}")
         return True
     if _is_rate_limited(result):
-        print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
-        return None
+        # Container sudah dibuat & dikirim ke IG — kemungkinan besar sudah dipublish.
+        # Return True agar mark_posted dipanggil dan post tidak diulang di siklus berikutnya.
+        print(f"⏳ Rate limit saat publish — dianggap berhasil untuk cegah duplikat.")
+        return True
     print(f"   ❌ Gagal publish: {result}")
     return False
 
@@ -131,8 +133,10 @@ def upload_carousel(image_urls: list, caption: str):
         print(f"   ✅ Carousel berhasil! Post ID: {result['id']}")
         return True
     if _is_rate_limited(result):
-        print(f"⏳ Rate limit Instagram — akan dicoba di siklus berikutnya.")
-        return None
+        # Carousel container sudah dibuat & dikirim — kemungkinan besar sudah dipublish.
+        # Return True agar mark_posted dipanggil dan post tidak diulang di siklus berikutnya.
+        print(f"⏳ Rate limit saat publish carousel — dianggap berhasil untuk cegah duplikat.")
+        return True
     print(f"   ❌ Gagal publish carousel: {result}")
     return False
 
