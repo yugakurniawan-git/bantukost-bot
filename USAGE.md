@@ -119,6 +119,81 @@ scp -r root@SERVER_IP:/data/bantukos/export/ ~/Desktop/bantukos-tiktok/
 
 ---
 
+## Sync Database ke Google Sheets
+
+Lihat semua listing dan history komentar autokomen langsung dari Google Sheets — mudah dicari, bisa filter, bisa share ke klien.
+
+### Setup awal (sekali saja)
+
+**1. Buat Service Account di Google Cloud:**
+1. Buka [console.cloud.google.com](https://console.cloud.google.com) → pilih project kamu
+2. **IAM & Admin** → **Service Accounts** → **+ CREATE SERVICE ACCOUNT**
+3. Name: `bantukos-sheets` → **CREATE AND CONTINUE** → **DONE**
+4. Klik service account yang baru dibuat → tab **Keys** → **ADD KEY** → **Create new key** → **JSON** → **CREATE**
+5. File JSON akan ter-download otomatis
+
+**2. Taruh credentials di server:**
+```bash
+# Upload dari laptop ke server
+scp google-credentials.json root@SERVER_IP:/data/bantukos/google_credentials.json
+```
+
+**3. Buat Google Sheet:**
+1. Buka [sheets.google.com](https://sheets.google.com) → buat spreadsheet baru
+2. Dari URL ambil ID-nya: `docs.google.com/spreadsheets/d/**ID_INI**/edit`
+3. Klik **Share** → masukkan email service account (ada di file JSON, field `client_email`) → **Editor** → **Send**
+
+**4. Isi `.env` di server:**
+```bash
+GOOGLE_CREDENTIALS_PATH=data/google_credentials.json
+GOOGLE_SPREADSHEET_ID=ID_DARI_URL_TADI
+```
+
+### Jalankan sync
+
+```bash
+# Sync listing saja
+docker exec -it CONTAINER_ID python3 sync_sheets.py
+
+# Sync komentar autokomen saja
+docker exec -it CONTAINER_ID python3 sync_sheets.py autokomen
+
+# Sync keduanya sekaligus
+docker exec -it CONTAINER_ID python3 sync_sheets.py all
+```
+
+Sync juga otomatis dijalankan setiap kali bot selesai posting ke Instagram.
+
+### Isi sheet
+
+**Sheet "Listings"** — satu baris per listing kos:
+
+| Kolom | Isi |
+|-------|-----|
+| ID | BK-58, BK-59, dst |
+| Sumber | facebook / mamikos |
+| Lokasi | Sesetan, Denpasar Selatan |
+| Harga | 800rb/bln |
+| No WA / Kontak | 081234567890 |
+| Status | posted / captioned / new |
+| Jumlah Foto | 3 |
+| Caption (preview) | 100 karakter pertama |
+| Tanggal Masuk | 2026-05-01 10:30 |
+| Tanggal Post IG | 2026-05-01 12:00 |
+
+**Sheet "AutoKomen"** — satu baris per komentar yang diposting bot:
+
+| Kolom | Isi |
+|-------|-----|
+| No | nomor urut |
+| Tanggal | 2026-05-01 14:30 |
+| Link Post FB | link post yang dikomen |
+| Lokasi Dicari | Sesetan |
+| Listing Ditawarkan | BK-58 |
+| Komentar yang Dipost | teks komentar (150 char) |
+
+---
+
 ## Generate Caption Manual
 
 Kalau ada post `new` yang captionnya belum di-generate:

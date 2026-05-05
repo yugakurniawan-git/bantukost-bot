@@ -1,4 +1,5 @@
 import time
+import subprocess
 import schedule
 from database import init_db, get_pending_posts, get_stats
 from scraper import scrape_groups, extract_location as _clean_location
@@ -14,6 +15,19 @@ from config import (
     IMGBB_API_KEY,
 )
 import os
+
+
+def _sync_sheets_background():
+    """Sync database ke Google Sheets di background (non-blocking)."""
+    try:
+        subprocess.Popen(
+            ["python3", "sync_sheets.py", "all"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("📊 Sync Google Sheets dimulai di background.")
+    except Exception as e:
+        print(f"⚠️ Sync Sheets gagal: {e}")
 
 def run_scraping(facebook_only: bool = False):
     """Jalankan scraping + generate caption. facebook_only=True untuk skip Mamikos."""
@@ -148,6 +162,8 @@ def run_posting(max_posts: int = 1, source: str = None):
             time.sleep(5)
 
     print(f"\n✅ Selesai: {uploaded}/{len(batch)} berhasil diupload")
+    if uploaded > 0:
+        _sync_sheets_background()
 
 def run_once():
     """Jalankan satu kali (untuk testing)."""

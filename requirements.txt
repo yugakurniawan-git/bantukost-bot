@@ -5,3 +5,5 @@ requests==2.32.3
 schedule==1.2.1
 python-dotenv==1.0.1
 cloudinary==1.40.0
+gspread==6.1.2
+google-auth==2.29.0
