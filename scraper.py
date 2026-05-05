@@ -669,7 +669,10 @@ def scrape_groups():
                         loc_re = re.compile(
                             r'\b(?:sesetan|renon|gatsu|sanur|kuta|canggu|seminyak|denpasar|'
                             r'ubud|jimbaran|kerobokan|berawa|mengwi|tabanan|bypass|panjer|'
-                            r'kesiman|pemogan|padangsambian|monang|imam bonjol|tohpati)\b',
+                            r'kesiman|pemogan|padangsambian|monang|imam bonjol|tohpati|'
+                            r'sidakarya|penatih|batubulan|ubung|peguyangan|tegal|sumerta|'
+                            r'tibubeneng|munggu|dalung|abianbase|abiansemal|sading|lukluk|'
+                            r'pererenan|cemagi|marlboro|sunset road|cargo|legian|nusa dua)\b',
                             re.IGNORECASE)
                         if not kos_re.search(text) and not loc_re.search(text):
                             return False

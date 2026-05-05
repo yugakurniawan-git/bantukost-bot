@@ -47,15 +47,17 @@ OFFER_KEYWORDS = [
 
 # Kata kunci yang menandakan orang MENCARI kos atau post non-listing — langsung skip
 SEEKING_KEYWORDS = [
-    # Pencari kos
-    "cari kos", "nyari kos", "butuh kos", "mau cari", "mau nyari",
+    # Pencari kos / kost
+    "cari kos", "nyari kos", "butuh kos", "cari kost", "nyari kost", "butuh kost",
+    "mau cari", "mau nyari", "lagi cari", "lagi nyari",
     "ada yang tau", "ada yang tahu", "ada rekomendasi", "ada recommend",
     "tolong info", "mohon info", "mohon bantu", "bantu cari",
     "recommend dong", "rekomen dong", "rekomendasiin", "saranin",
     "ada yang punya", "ada yang jual", "ada yang sewa",
-    "lagi cari", "lagi nyari", "help me find", "looking for",
-    "need a room", "need room", "mencari kos", "mencari kamar",
-    "butuh kamar", "mau nge-kos", "mau ngekos di",
+    "help me find", "looking for",
+    "need a room", "need room", "mencari kos", "mencari kost", "mencari kamar",
+    "butuh kamar", "mau nge-kos", "mau ngekos di", "mau ngekost",
+    "belum dapat kos", "belum dapat kost", "susah cari kos", "susah cari kost",
     # Post warning / penipuan / non-listing
     "modus penipuan", "hati hati kawan", "hati-hati", "waspada",
     "warninggg", "scam", "penipu", "tipu", "tertipu",
