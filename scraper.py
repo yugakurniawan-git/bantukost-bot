@@ -418,6 +418,35 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
 
 # ─── Main Scraper ──────────────────────────────────────
 
+def _discover_group_urls(page) -> list:
+    """Auto-discover semua grup yang diikuti akun dari halaman Groups."""
+    print("   🔍 Auto-discover grup dari akun...")
+    try:
+        page.goto("https://www.facebook.com/groups/", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        for _ in range(5):
+            page.evaluate("window.scrollBy(0, 1500)")
+            time.sleep(1)
+
+        urls = page.evaluate("""
+            () => {
+                const found = new Set();
+                document.querySelectorAll('a[href*="/groups/"]').forEach(a => {
+                    const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._]+)\\/?/);
+                    if (m && !['feed','discover','create','you','joins'].includes(m[1])) {
+                        found.add('https://www.facebook.com/groups/' + m[1] + '/');
+                    }
+                });
+                return [...found];
+            }
+        """)
+        print(f"   ✅ {len(urls)} grup ditemukan")
+        return urls
+    except Exception as e:
+        print(f"   ⚠️ Gagal discover grup: {e}")
+        return []
+
+
 def scrape_groups():
     print("\n🚀 Mulai scraping Facebook Groups...")
 
@@ -457,13 +486,20 @@ def scrape_groups():
         page = browser.new_page()
         total_new = 0
 
-        for idx, group_url in enumerate(FACEBOOK_GROUPS):
+        # Auto-discover kalau FACEBOOK_GROUPS kosong
+        targets = FACEBOOK_GROUPS if FACEBOOK_GROUPS else _discover_group_urls(page)
+        if not targets:
+            print("❌ Tidak ada grup ditemukan. Isi FACEBOOK_GROUPS di config.py atau pastikan akun sudah join grup.")
+            browser.close()
+            return
+
+        for idx, group_url in enumerate(targets):
             if total_new >= MAX_POSTS_PER_CYCLE:
                 print(f"\n⏹️ Batas {MAX_POSTS_PER_CYCLE} post tercapai.")
                 break
 
             group_name = group_url.rstrip("/").split("/")[-1]
-            print(f"\n📂 [{idx+1}/{len(FACEBOOK_GROUPS)}] Grup: {group_name}")
+            print(f"\n📂 [{idx+1}/{len(targets)}] Grup: {group_name}")
 
             try:
                 # Buka grup dulu
@@ -764,7 +800,7 @@ def scrape_groups():
 
                 print(f"   📊 Grup ini: {group_new} postingan baru")
 
-                if idx < len(FACEBOOK_GROUPS) - 1:
+                if idx < len(targets) - 1:
                     wait = random.randint(30, 90)
                     print(f"   ⏳ Jeda {wait}s sebelum grup berikutnya...")
                     time.sleep(wait)

@@ -9,11 +9,9 @@ OPENAI_MODEL   = "gpt-4o-mini"  # murah & cukup untuk caption
 
 # ─── Facebook ─────────────────────────────────────────
 # Daftar URL grup Facebook yang mau di-monitor
-FACEBOOK_GROUPS = [
-    # Ganti dengan URL grup kamu
-     "https://www.facebook.com/groups/406723907186704",
-    # "https://www.facebook.com/groups/NAMA_GRUP_2",
-]
+# Kosongkan untuk auto-discover semua grup yang diikuti akun.
+# Isi dengan URL spesifik kalau mau batasi ke grup tertentu saja.
+FACEBOOK_GROUPS = []
 
 # Kata kunci WAJIB ada — postingan harus mengandung salah satu ini
 KEYWORDS = [
