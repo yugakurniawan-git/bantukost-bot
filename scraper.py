@@ -418,9 +418,18 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
 
 # ─── Main Scraper ──────────────────────────────────────
 
+KOS_GROUP_KEYWORDS = [
+    "kos", "kost", "kontrakan", "sewa", "rent", "room", "kamar",
+    "properti", "property", "housing", "hunian", "indekos", "ngekos",
+]
+SKIP_GROUPS = ["feed", "discover", "create", "you", "joins", "search"]
+
 def _discover_group_urls(page) -> list:
-    """Auto-discover semua grup yang diikuti akun dari halaman Groups."""
-    print("   🔍 Auto-discover grup dari akun...")
+    """
+    Auto-discover grup yang diikuti akun, filter hanya grup kos/sewa.
+    Grup yang namanya tidak mengandung kata kos-related akan diskip.
+    """
+    print("   🔍 Auto-discover grup kos dari akun...")
     try:
         page.goto("https://www.facebook.com/groups/", wait_until="domcontentloaded", timeout=30000)
         time.sleep(3)
@@ -428,20 +437,42 @@ def _discover_group_urls(page) -> list:
             page.evaluate("window.scrollBy(0, 1500)")
             time.sleep(1)
 
-        urls = page.evaluate("""
+        groups = page.evaluate("""
             () => {
-                const found = new Set();
+                const found = [];
                 document.querySelectorAll('a[href*="/groups/"]').forEach(a => {
                     const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._]+)\\/?/);
-                    if (m && !['feed','discover','create','you','joins'].includes(m[1])) {
-                        found.add('https://www.facebook.com/groups/' + m[1] + '/');
+                    if (m) {
+                        const name = (a.innerText || a.textContent || '').trim();
+                        found.push({ url: 'https://www.facebook.com/groups/' + m[1] + '/', name, id: m[1] });
                     }
                 });
-                return [...found];
+                return found;
             }
         """)
-        print(f"   ✅ {len(urls)} grup ditemukan")
-        return urls
+
+        filtered = []
+        skipped = []
+        seen = set()
+        for g in groups:
+            gid = g.get("id", "")
+            name = g.get("name", "").lower()
+            url = g.get("url", "")
+            if gid in SKIP_GROUPS or gid in seen:
+                continue
+            seen.add(gid)
+            if any(kw in name for kw in KOS_GROUP_KEYWORDS):
+                filtered.append(url)
+                print(f"   ✅ {g['name'] or gid}")
+            else:
+                skipped.append(g.get("name") or gid)
+
+        if skipped:
+            print(f"   ⏭️  Skip {len(skipped)} grup non-kos: {', '.join(skipped[:5])}" +
+                  (f" +{len(skipped)-5} lainnya" if len(skipped) > 5 else ""))
+
+        print(f"   📋 Total grup kos: {len(filtered)}")
+        return filtered
     except Exception as e:
         print(f"   ⚠️ Gagal discover grup: {e}")
         return []
