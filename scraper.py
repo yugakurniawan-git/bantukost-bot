@@ -427,13 +427,13 @@ SKIP_GROUPS = ["feed", "discover", "create", "you", "joins", "search"]
 def _discover_group_urls(page) -> list:
     """
     Auto-discover grup yang diikuti akun, filter hanya grup kos/sewa.
-    Grup yang namanya tidak mengandung kata kos-related akan diskip.
+    Kalau nama grup tidak terbaca, tetap disertakan agar tidak terlewat.
     """
     print("   🔍 Auto-discover grup kos dari akun...")
     try:
         page.goto("https://www.facebook.com/groups/", wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
-        for _ in range(5):
+        time.sleep(4)
+        for _ in range(8):
             page.evaluate("window.scrollBy(0, 1500)")
             time.sleep(1)
 
@@ -441,11 +441,31 @@ def _discover_group_urls(page) -> list:
             () => {
                 const found = [];
                 document.querySelectorAll('a[href*="/groups/"]').forEach(a => {
-                    const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._]+)\\/?/);
-                    if (m) {
-                        const name = (a.innerText || a.textContent || '').trim();
-                        found.push({ url: 'https://www.facebook.com/groups/' + m[1] + '/', name, id: m[1] });
+                    const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._-]+)\\/?/);
+                    if (!m) return;
+
+                    // Coba ambil nama dari berbagai sumber
+                    let name = (a.innerText || a.textContent || '').trim();
+
+                    // Coba dari aria-label
+                    if (!name) name = (a.getAttribute('aria-label') || '').trim();
+
+                    // Coba dari title
+                    if (!name) name = (a.getAttribute('title') || '').trim();
+
+                    // Coba dari span/strong di dalam link
+                    if (!name) {
+                        const inner = a.querySelector('span, strong');
+                        if (inner) name = inner.innerText.trim();
                     }
+
+                    // Coba dari parent element
+                    if (!name && a.parentElement) {
+                        const parentSpan = a.parentElement.querySelector('span[dir="auto"], span[class*="name"]');
+                        if (parentSpan) name = parentSpan.innerText.trim();
+                    }
+
+                    found.push({ url: 'https://www.facebook.com/groups/' + m[1] + '/', name, id: m[1] });
                 });
                 return found;
             }
@@ -453,25 +473,40 @@ def _discover_group_urls(page) -> list:
 
         filtered = []
         skipped = []
+        no_name = []
         seen = set()
+
         for g in groups:
             gid = g.get("id", "")
-            name = g.get("name", "").lower()
+            name = g.get("name", "").strip()
+            name_lower = name.lower()
             url = g.get("url", "")
+
             if gid in SKIP_GROUPS or gid in seen:
                 continue
             seen.add(gid)
-            if any(kw in name for kw in KOS_GROUP_KEYWORDS):
+
+            if any(kw in name_lower for kw in KOS_GROUP_KEYWORDS):
                 filtered.append(url)
-                print(f"   ✅ {g['name'] or gid}")
+                print(f"   ✅ {name or gid}")
+            elif not name:
+                # Nama tidak terbaca — tetap masukkan, biarkan filter konten yang handle
+                no_name.append(url)
             else:
-                skipped.append(g.get("name") or gid)
+                skipped.append(name or gid)
+
+        print(f"   📊 Ditemukan: {len(seen)} grup total | kos: {len(filtered)} | tanpa nama: {len(no_name)} | non-kos: {len(skipped)}")
 
         if skipped:
-            print(f"   ⏭️  Skip {len(skipped)} grup non-kos: {', '.join(skipped[:5])}" +
+            print(f"   ⏭️  Skip non-kos: {', '.join(skipped[:5])}" +
                   (f" +{len(skipped)-5} lainnya" if len(skipped) > 5 else ""))
 
-        print(f"   📋 Total grup kos: {len(filtered)}")
+        # Kalau tidak ada grup kos terdeteksi, sertakan grup tanpa nama sebagai fallback
+        if not filtered and no_name:
+            print(f"   ⚠️ Nama grup tidak terbaca, coba {len(no_name)} grup tanpa nama...")
+            filtered = no_name
+
+        print(f"   📋 Total grup yang akan di-scan: {len(filtered)}")
         return filtered
     except Exception as e:
         print(f"   ⚠️ Gagal discover grup: {e}")
