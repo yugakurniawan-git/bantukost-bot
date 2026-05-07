@@ -78,13 +78,16 @@ def init_db():
             source          TEXT DEFAULT 'facebook'
         )
     """)
-    # Migrate: tambah kolom source kalau belum ada (untuk DB lama)
-    try:
-        c.execute("ALTER TABLE posts ADD COLUMN source TEXT DEFAULT 'facebook'")
-        conn.commit()
-        print("🔄 Migrasi DB: kolom 'source' ditambahkan.")
-    except Exception:
-        pass  # kolom sudah ada
+    for col, definition in [
+        ("source", "TEXT DEFAULT 'facebook'"),
+        ("cloudinary_urls", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")
+            conn.commit()
+            print(f"🔄 Migrasi DB: kolom '{col}' ditambahkan.")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     print("✅ Database siap.")
@@ -126,6 +129,16 @@ def update_caption(post_id: int, caption: str):
     c.execute("UPDATE posts SET caption = ?, status = 'captioned' WHERE id = ?", (caption, post_id))
     conn.commit()
     conn.close()
+
+def save_cloudinary_urls(post_id: int, urls: list):
+    """Simpan Cloudinary URLs setelah berhasil upload."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE posts SET cloudinary_urls = ? WHERE id = ?",
+              (",".join(urls), post_id))
+    conn.commit()
+    conn.close()
+
 
 def mark_posted(post_id: int):
     """Tandai postingan sudah di-upload ke Instagram."""

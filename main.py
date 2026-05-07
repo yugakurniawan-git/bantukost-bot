@@ -1,7 +1,7 @@
 import time
 import subprocess
 import schedule
-from database import init_db, get_pending_posts, get_stats
+from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls
 from scraper import scrape_groups, extract_location as _clean_location
 from mamikos_scraper import scrape_mamikos
 from caption import process_new_posts
@@ -136,7 +136,10 @@ def _upload_one_post(post) -> bool:
             print(f"   ✅ {os.path.basename(target)} → OK")
 
     caption_with_id = caption + f"\n\n📋 ID: BK-{post_id}"
-    return post_to_instagram(post_id, public_urls, caption_with_id)  # True | False | None
+    result = post_to_instagram(post_id, public_urls, caption_with_id)
+    if result is True and public_urls:
+        save_cloudinary_urls(post_id, public_urls)
+    return result
 
 
 def run_posting(max_posts: int = 1, source: str = None):

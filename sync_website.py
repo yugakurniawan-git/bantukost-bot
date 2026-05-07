@@ -111,8 +111,10 @@ def build_listings() -> list:
     conn = sqlite3.connect(BANTUKOS_DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
+    # cloudinary_urls mungkin belum ada di DB lama — pakai COALESCE
     c.execute("""
-        SELECT id, location, price, raw_text, source, created_at
+        SELECT id, location, price, raw_text, source, created_at,
+               COALESCE(cloudinary_urls, '') as cloudinary_urls
         FROM posts
         WHERE status = 'posted'
         ORDER BY created_at DESC
@@ -121,6 +123,8 @@ def build_listings() -> list:
     conn.close()
 
     listings = []
+    seen = set()  # deduplikasi by (location, price)
+
     for r in rows:
         raw = r["raw_text"] or ""
         if any(kw in raw.lower() for kw in SEEKING_KW):
@@ -128,14 +132,26 @@ def build_listings() -> list:
         price = normalize_price(r["price"])
         if not price:
             continue
+
+        loc = clean_location(r["location"])
+        dedup_key = (loc.lower(), price.lower())
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        # Ambil foto pertama dari Cloudinary URLs
+        cdn_urls = [u for u in (r["cloudinary_urls"] or "").split(",") if u.strip()]
+        image_url = cdn_urls[0] if cdn_urls else ""
+
         listings.append({
             "id": r["id"],
-            "location": clean_location(r["location"]),
+            "location": loc,
             "price": price,
             "type": get_kos_type(raw),
             "facilities": parse_facilities(raw),
             "source": r["source"] or "facebook",
             "posted_at": (r["created_at"] or "")[:10],
+            "image_url": image_url,
         })
     return listings
 
