@@ -9,9 +9,14 @@ OPENAI_MODEL   = "gpt-4o-mini"  # murah & cukup untuk caption
 
 # ─── Facebook ─────────────────────────────────────────
 # Daftar URL grup Facebook yang mau di-monitor
-# Kosongkan untuk auto-discover semua grup yang diikuti akun.
-# Isi dengan URL spesifik kalau mau batasi ke grup tertentu saja.
-FACEBOOK_GROUPS = []
+FACEBOOK_GROUPS = [
+    "https://www.facebook.com/groups/406723907186704/",   # INFO KOS - BALI
+    "https://www.facebook.com/groups/861393030619800/",   # Kost Denpasar
+    "https://www.facebook.com/groups/1063633451232483/",  # INFO KOST DENPASAR Sesetan
+    "https://www.facebook.com/groups/1380894039527782/",  # INFO KOS SESETAN / Denpasar
+    "https://www.facebook.com/groups/1474790899487041/",  # Kos dan Kontrakan Bali
+    "https://www.facebook.com/groups/infokossesetan/",    # Info kos-kosan di Bali Denpasar
+]
 
 # Kata kunci WAJIB ada — postingan harus mengandung salah satu ini
 KEYWORDS = [
