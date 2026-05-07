@@ -29,6 +29,19 @@ def _sync_sheets_background():
     except Exception as e:
         print(f"⚠️ Sync Sheets gagal: {e}")
 
+
+def _sync_website_background():
+    """Sync listings ke website bantukos.com via GitHub API (non-blocking)."""
+    try:
+        subprocess.Popen(
+            ["python3", "sync_website.py"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("🌐 Sync website dimulai di background.")
+    except Exception as e:
+        print(f"⚠️ Sync website gagal: {e}")
+
 def run_scraping(facebook_only: bool = False):
     """Jalankan scraping + generate caption. facebook_only=True untuk skip Mamikos."""
     print("\n" + "="*50)
@@ -164,6 +177,7 @@ def run_posting(max_posts: int = 1, source: str = None):
     print(f"\n✅ Selesai: {uploaded}/{len(batch)} berhasil diupload")
     if uploaded > 0:
         _sync_sheets_background()
+        _sync_website_background()
 
 def run_once():
     """Jalankan satu kali (untuk testing)."""
