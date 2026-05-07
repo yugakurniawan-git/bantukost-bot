@@ -116,11 +116,18 @@ def _download_photos(session: requests.Session, photo_urls: list,
                      post_id: str) -> list:
     """Download foto ke lokal, return list path yang berhasil."""
     saved = []
+    seen_hashes = set()  # deduplikasi by MD5 konten
     hash_prefix = hashlib.md5(post_id.encode()).hexdigest()[:8]
     for i, url in enumerate(photo_urls[:MAX_PHOTOS]):
         fname = f"mami_{hash_prefix}_{i}.jpg"
         fpath = os.path.join(IMAGES_DIR, fname)
         if _download_image(session, url, fpath):
+            content_hash = hashlib.md5(open(fpath, "rb").read()).hexdigest()
+            if content_hash in seen_hashes:
+                os.remove(fpath)
+                print(f"      ⚠️ Foto {i+1} duplikat (konten sama), skip.")
+                continue
+            seen_hashes.add(content_hash)
             saved.append(fpath)
             size_kb = os.path.getsize(fpath) // 1024
             print(f"      📷 Foto {i+1} OK ({size_kb} KB): {fname}")

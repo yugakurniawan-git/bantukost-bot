@@ -204,7 +204,7 @@ def process_post_images(page, post_element, post_id: str) -> tuple:
         return [], ""
 
     saved = []
-    seen_sizes = set()   # deduplikasi berdasarkan ukuran file — tangkap foto sama dari CDN berbeda
+    seen_hashes = set()  # deduplikasi by MD5 konten — lebih akurat dari ukuran file
     ocr_texts = []
     for i, url in enumerate(img_urls):
         name = f"{hashlib.md5(post_id.encode()).hexdigest()[:8]}_{i}.jpg"
@@ -213,14 +213,15 @@ def process_post_images(page, post_element, post_id: str) -> tuple:
         if not ok:
             ok = download_image_via_playwright(page, url, path)
         if ok:
-            size = os.path.getsize(path)
-            if size in seen_sizes:
-                os.remove(path)  # buang duplikat
-                print(f"   ⚠️ Foto {i+1} duplikat (size {size//1024}KB), skip.")
+            content_hash = hashlib.md5(open(path, "rb").read()).hexdigest()
+            if content_hash in seen_hashes:
+                os.remove(path)
+                print(f"   ⚠️ Foto {i+1} duplikat (konten sama), skip.")
                 continue
-            seen_sizes.add(size)
+            seen_hashes.add(content_hash)
             saved.append(path)
-            print(f"   📷 Foto {i+1} OK ({size//1024}KB): {name}")
+            size_kb = os.path.getsize(path) // 1024
+            print(f"   📷 Foto {i+1} OK ({size_kb}KB): {name}")
             if i == 0:
                 ocr_text = ocr_image(path)
                 if ocr_text and is_kos_flyer(ocr_text):

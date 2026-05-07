@@ -120,16 +120,22 @@ def _upload_one_post(post) -> bool:
         return False
 
     # Upload ke Cloudinary — generate watermark dengan lokasi kalau belum ada
+    import hashlib as _hashlib
     public_urls = []
+    seen_upload_hashes = set()  # cegah foto konten sama di-upload dua kali
     print(f"☁️ Upload {len(image_paths[:5])} foto ke Cloudinary...")
     for path in image_paths[:5]:
-        wm_path = path.replace(".jpg", "_wm.jpg")
         # Card dan fallback sudah punya branding bawaan — skip watermark
         if "card_" in path or "fallback" in os.path.basename(path):
             target = path
         else:
             # Selalu regenerate watermark (jangan pakai cache _wm.jpg lama)
             target = add_watermark(path, location=location or "", price=price or "")
+        content_hash = _hashlib.md5(open(target, "rb").read()).hexdigest()
+        if content_hash in seen_upload_hashes:
+            print(f"   ⚠️ {os.path.basename(target)} duplikat, skip.")
+            continue
+        seen_upload_hashes.add(content_hash)
         url = upload_to_cloudinary(target)
         if url:
             public_urls.append(url)
