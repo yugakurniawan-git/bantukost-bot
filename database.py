@@ -82,6 +82,8 @@ def init_db():
         ("source", "TEXT DEFAULT 'facebook'"),
         ("cloudinary_urls", "TEXT DEFAULT ''"),
         ("source_url", "TEXT DEFAULT ''"),
+        ("wa_checked_at", "TEXT DEFAULT NULL"),  # timestamp saat WA ke owner dikirim
+        ("verified", "INTEGER DEFAULT 0"),        # 1 = owner konfirmasi masih kosong
     ]:
         try:
             c.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")

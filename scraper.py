@@ -837,6 +837,8 @@ def scrape_groups():
                     if ocr_text and len(ocr_text) > len(text):
                         final_text = text + "\n\n[dari gambar]\n" + ocr_text
 
+                    if not entry_source_url:
+                        print(f"   ⚠️ source_url tidak berhasil diambil untuk: {text[:50].strip()!r}")
                     saved_id = save_post(post_id, final_text[:2000], location, price, contact, img_paths,
                                         source_url=entry_source_url)
                     if saved_id:
