@@ -336,12 +336,30 @@ def get_post_urls_from_feed(page) -> list:
     return urls or []
 
 
+def extract_post_url_from_element(page, post_el) -> str:
+    """Coba ambil URL post asli dari elemen artikel DOM."""
+    try:
+        url = page.evaluate("""
+            (el) => {
+                const a = el.querySelector(
+                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="]'
+                );
+                if (!a) return '';
+                let h = a.href || '';
+                return h.includes('story_fbid=') ? h : h.split('?')[0];
+            }
+        """, post_el)
+        return url or ""
+    except Exception:
+        return ""
+
+
 def scrape_comments_for_listings(page, post_url: str) -> list:
     """
     Buka satu post Facebook, extract:
     1. Isi post UTAMA (kalau itu listing kos langsung)
     2. Komentar yang merupakan penawaran kos
-    Returns list of (None, text, img_urls).
+    Returns list of (None, text, img_urls, source_url).
     """
     print(f"      💬 Buka post: {post_url[-40:]}")
     try:
@@ -384,7 +402,7 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
                     if not is_seeking_post(txt):
                         img_urls = get_post_photo_urls(page, art)
                         print(f"         📄 Post utama (DOM): {txt[:60].strip()!r}")
-                        results.append((None, txt[:2000], img_urls))
+                        results.append((None, txt[:2000], img_urls, post_url))
                         main_post_saved = True
                         break
     except Exception as e:
@@ -404,11 +422,11 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
 
         if not main_post_saved:
             print(f"         📄 Post utama (JSON): {text[:60].strip()!r}")
-            results.append((None, text, img_urls))
+            results.append((None, text, img_urls, post_url))
             main_post_saved = True
         else:
             if has_offering_signal(text) and len(text) >= 30:
-                results.append((None, text, img_urls))
+                results.append((None, text, img_urls, post_url))
 
         if len(results) >= MAX_COMMENTS_PER_POST + 1:
             break
@@ -687,7 +705,8 @@ def scrape_groups():
                             key = txt[:120]
                             if key not in seen_keys:
                                 seen_keys.add(key)
-                                collected[key] = (art, txt)
+                                art_url = extract_post_url_from_element(page, art)
+                                collected[key] = (art, txt, [], art_url)
                                 new_this_step += 1
                                 print(f"      📌 [{step}] {txt[:60].strip()!r}")
                         except Exception:
@@ -744,11 +763,15 @@ def scrape_groups():
                     (dipakai untuk komentar agar tidak ikut ambil teks non-listing).
                     """
                     nonlocal total_new, group_new
-                    if len(entry) == 3:
+                    if len(entry) == 4:
+                        post_el, text, extra_img_urls, entry_source_url = entry
+                    elif len(entry) == 3:
                         post_el, text, extra_img_urls = entry
+                        entry_source_url = ""
                     else:
                         post_el, text = entry
                         extra_img_urls = []
+                        entry_source_url = ""
 
                     if len(text) < 15:
                         return False
@@ -792,6 +815,9 @@ def scrape_groups():
                     ocr_text  = ""
                     if post_el is not None:
                         img_paths, ocr_text = process_post_images(page, post_el, post_id)
+                        # Ambil URL post dari DOM kalau belum ada
+                        if not entry_source_url:
+                            entry_source_url = extract_post_url_from_element(page, post_el)
                     elif extra_img_urls:
                         for i, url in enumerate(extra_img_urls[:5]):
                             name = f"{hashlib.md5(post_id.encode()).hexdigest()[:8]}_{i}.jpg"
@@ -811,11 +837,13 @@ def scrape_groups():
                     if ocr_text and len(ocr_text) > len(text):
                         final_text = text + "\n\n[dari gambar]\n" + ocr_text
 
-                    saved_id = save_post(post_id, final_text[:2000], location, price, contact, img_paths)
+                    saved_id = save_post(post_id, final_text[:2000], location, price, contact, img_paths,
+                                        source_url=entry_source_url)
                     if saved_id:
                         total_new += 1
                         group_new += 1
-                        print(f"   ✅ [{location}] {price} | {len(img_paths)} foto | {text[:60].strip()}...")
+                        src_tag = f" | 🔗 {entry_source_url[-40:]}" if entry_source_url else ""
+                        print(f"   ✅ [{location}] {price} | {len(img_paths)} foto{src_tag} | {text[:60].strip()}...")
                         return True
                     return False
 

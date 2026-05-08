@@ -81,6 +81,7 @@ def init_db():
     for col, definition in [
         ("source", "TEXT DEFAULT 'facebook'"),
         ("cloudinary_urls", "TEXT DEFAULT ''"),
+        ("source_url", "TEXT DEFAULT ''"),
     ]:
         try:
             c.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")
@@ -102,16 +103,16 @@ def is_duplicate(fb_post_id: str) -> bool:
     return result is not None
 
 def save_post(fb_post_id, raw_text, location, price, contact, image_paths,
-              source: str = "facebook"):
+              source: str = "facebook", source_url: str = ""):
     """Simpan postingan baru ke database. source: 'facebook' atau 'mamikos'."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO posts (fb_post_id, raw_text, location, price, contact, image_paths, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (fb_post_id, raw_text, location, price, contact, image_paths, source, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (fb_post_id, raw_text, location, price, contact,
-              ",".join(image_paths), source))
+              ",".join(image_paths), source, source_url or ""))
         conn.commit()
         post_id = c.lastrowid
         print(f"💾 Tersimpan: {fb_post_id[:20]}...")

@@ -43,7 +43,8 @@ def show_detail(post_id: int):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-        SELECT id, location, price, contact, source, status, raw_text, caption, created_at
+        SELECT id, location, price, contact, source, status, raw_text, caption, created_at,
+               COALESCE(source_url, '') as source_url
         FROM posts WHERE id = ?
     """, (post_id,))
     row = c.fetchone()
@@ -53,7 +54,7 @@ def show_detail(post_id: int):
         print(f"Post ID {post_id} tidak ditemukan.")
         return
 
-    pid, loc, price, contact, src, status, raw_text, caption, created = row
+    pid, loc, price, contact, src, status, raw_text, caption, created, source_url = row
 
     print(f"\n{'='*50}")
     print(f"POST ID   : {pid}")
@@ -63,6 +64,7 @@ def show_detail(post_id: int):
     print(f"Lokasi    : {loc}")
     print(f"Harga     : {price}")
     print(f"No Telp   : {contact or '(tidak ada — Mamikos tidak tampilkan kontak)'}")
+    print(f"Link Post : {source_url or '(tidak ada)'}")
     print(f"\n--- Raw Text ---")
     print(raw_text or "(kosong)")
     if caption:
