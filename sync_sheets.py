@@ -58,7 +58,9 @@ def sync_listings():
     c = conn.cursor()
     c.execute("""
         SELECT id, source, location, price, contact, status,
-               image_paths, caption, created_at, posted_at
+               image_paths, caption, created_at, posted_at,
+               COALESCE(verified, 0) as verified,
+               COALESCE(verified_at, '') as verified_at
         FROM posts
         ORDER BY id DESC
     """)
@@ -71,23 +73,25 @@ def sync_listings():
 
     # Header
     headers = [
-        "ID", "IG Caption ID", "Sumber", "Lokasi", "Harga", "No WA / Kontak",
-        "Status", "Jumlah Foto", "Caption (preview)", "Tanggal Masuk", "Tanggal Post IG"
+        "ID", "Sumber", "Lokasi", "Harga", "No WA / Kontak",
+        "Status", "Terverifikasi", "Tgl Verifikasi",
+        "Jumlah Foto", "Caption (preview)", "Tanggal Masuk", "Tanggal Post IG"
     ]
 
     data = [headers]
     for r in rows:
-        post_id, source, location, price, contact, status, img_paths, caption, created_at, posted_at = r
+        post_id, source, location, price, contact, status, img_paths, caption, created_at, posted_at, verified, verified_at = r
         foto_count = len([p for p in (img_paths or "").split(",") if p.strip()])
         caption_preview = (caption or "")[:100].replace("\n", " ")
         data.append([
-            f"BK-{post_id}",
             f"BK-{post_id}",
             source or "facebook",
             location or "-",
             price or "-",
             contact or "-",
             status or "-",
+            "✅ Ya" if verified else "—",
+            (verified_at or "-")[:16],
             foto_count,
             caption_preview,
             (created_at or "-")[:16],
@@ -98,7 +102,8 @@ def sync_listings():
     sheet.update(data, "A1")
 
     # Format header — bold + freeze
-    sheet.format("A1:K1", {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.2, "green": 0.5, "blue": 0.8}, "horizontalAlignment": "CENTER"})
+    sheet.format("A1:L1", {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.2, "green": 0.5, "blue": 0.8}, "horizontalAlignment": "CENTER"})
+    # Highlight kolom Terverifikasi (G) hijau untuk yang terverifikasi
     sheet.freeze(rows=1)
 
     print(f"   ✅ {len(rows)} listing di-sync ke sheet 'Listings'")

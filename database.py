@@ -84,6 +84,7 @@ def init_db():
         ("source_url", "TEXT DEFAULT ''"),
         ("wa_checked_at", "TEXT DEFAULT NULL"),  # timestamp saat WA ke owner dikirim
         ("verified", "INTEGER DEFAULT 0"),        # 1 = owner konfirmasi masih kosong
+        ("verified_at", "TEXT DEFAULT NULL"),     # timestamp saat diverifikasi
     ]:
         try:
             c.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")
@@ -177,7 +178,8 @@ def get_pending_posts(source: str = None):
     rows = c.fetchall()
     conn.close()
     # Urutkan berdasarkan skor kualitas — terbaik duluan
-    rows.sort(key=score_post, reverse=True)
+    # Prioritas: (1) punya kontak, (2) skor kualitas tertinggi
+    rows.sort(key=lambda r: (1 if r[5] else 0, score_post(r)), reverse=True)
     return rows
 
 def get_stats():
