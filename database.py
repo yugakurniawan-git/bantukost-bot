@@ -85,6 +85,7 @@ def init_db():
         ("wa_checked_at", "TEXT DEFAULT NULL"),  # timestamp saat WA ke owner dikirim
         ("verified", "INTEGER DEFAULT 0"),        # 1 = owner konfirmasi masih kosong
         ("verified_at", "TEXT DEFAULT NULL"),     # timestamp saat diverifikasi
+        ("contact_lid", "TEXT DEFAULT NULL"),     # LID WA owner untuk matching reply
     ]:
         try:
             c.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")
