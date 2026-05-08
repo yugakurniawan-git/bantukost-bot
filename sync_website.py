@@ -38,17 +38,57 @@ SEEKING_KW = [
 def clean_location(loc: str) -> str:
     if not loc:
         return "Bali"
-    loc = re.sub(r"[^\x00-\x7FÀ-ɏĀ-ſ]+", "", loc).strip()
-    areas = [
-        "Canggu", "Seminyak", "Kuta", "Ubud", "Sanur", "Jimbaran", "Nusa Dua",
-        "Sesetan", "Renon", "Kerobokan", "Pemogan", "Padangsambian", "Mengwi",
-        "Gatsu", "Denpasar", "Tabanan", "Gianyar", "Berawa", "Legian", "Pererenan",
+    loc = re.sub(r"[^\x00-\x7FÀ-ɏĀ-ſ\-]+", "", loc).strip()
+    loc_lower = loc.lower()
+
+    # Sub-area spesifik — urutan penting, lebih spesifik dulu
+    sub_areas = [
+        "Monang-Maning", "Monang Maning", "Monanmaning",
+        "Sesetan", "Panjer", "Sidakarya", "Niti Mandala",
+        "Renon", "Kesiman", "Tonja", "Peguyangan",
+        "Pemogan", "Pedungan", "Serangan",
+        "Padangsambian", "Tegal Harum", "Tegal Kertha",
+        "Kerobokan", "Dalung", "Sempidi",
+        "Berawa", "Pererenan", "Batu Bolong",
+        "Canggu", "Seminyak", "Legian", "Kuta", "Tuban", "Kedonganan",
+        "Sanur", "Mertasari",
+        "Jimbaran", "Nusa Dua", "Tanjung Benoa",
+        "Ubud", "Mas", "Tegallalang",
+        "Gianyar", "Tabanan", "Mengwi",
+        "Gatsu", "Gatot Subroto",
     ]
-    for a in areas:
-        if a.lower() in loc.lower():
-            return a
+
+    found_sub = None
+    for area in sub_areas:
+        if area.lower() in loc_lower:
+            found_sub = area
+            # Normalize ejaan
+            loc = re.sub(re.escape(area), area, loc, flags=re.IGNORECASE, count=1)
+            break
+
+    # Kalau ada info jalan/gang — tampilkan sebagai "Jl. X, Sub-area" atau "Gg. X, Sub-area"
+    has_street = bool(re.search(
+        r'\b(jl\.?|jalan|gg\.?|gang|blok|no\.?\s*\d)', loc, re.IGNORECASE
+    ))
+    if has_street:
+        parts = [p.strip() for p in loc.split(",") if p.strip()]
+        # Ambil max 2 bagian paling depan (biasanya: jalan, sub-area)
+        result = ", ".join(parts[:2])
+        # Singkatkan "Jalan" → "Jl.", "Gang" → "Gg."
+        result = re.sub(r'\bjalan\s+', 'Jl. ', result, flags=re.IGNORECASE)
+        result = re.sub(r'\bgang\s+', 'Gg. ', result, flags=re.IGNORECASE)
+        return result[:50].strip(", ")
+
+    if found_sub:
+        return found_sub
+
+    # Broad areas sebagai fallback terakhir
+    for broad in ["Denpasar", "Badung", "Kuta", "Gianyar", "Tabanan"]:
+        if broad.lower() in loc_lower:
+            return broad
+
     parts = loc.split(",")
-    return parts[0].strip()[:30] if parts else "Bali"
+    return parts[0].strip()[:35] if parts else "Bali"
 
 
 def normalize_price(price: str):
