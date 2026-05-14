@@ -17,6 +17,18 @@ from config import (
 import os
 
 
+def _notify_wa(message: str):
+    """Kirim notifikasi ke owner via WA bot (non-blocking, best-effort)."""
+    import urllib.request, urllib.error, json as _json
+    wa_url = os.getenv("WA_NOTIFY_URL", "http://bantukos-wa-bot:3001/notify")
+    try:
+        data = _json.dumps({"message": message}).encode()
+        req = urllib.request.Request(wa_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"⚠️ WA notify gagal: {e}")
+
+
 def _sync_sheets_background():
     """Sync database ke Google Sheets di background (non-blocking)."""
     try:
@@ -58,8 +70,18 @@ def _check_token_expiry():
             print("   → Generate token baru di: developers.facebook.com/tools/explorer")
             print("   → Kirim ke admin untuk di-update ke server")
             print("🚨" * 25 + "\n")
+            _notify_wa(
+                f"🚨 *ALERT Bantukos Bot*\n\n"
+                f"Token Instagram akan expired dalam *{days_left} hari* ({expires_str})!\n\n"
+                f"Segera generate token baru:\n"
+                f"developers.facebook.com/tools/explorer\n\n"
+                f"Kirim token baru ke admin untuk di-update."
+            )
         elif days_left <= 20:
             print(f"⚠️  Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!")
+            _notify_wa(
+                f"⚠️ *Bantukos Bot*: Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!"
+            )
         else:
             print(f"✅ Token Instagram valid — {days_left} hari tersisa (expired: {expires_str})")
     except ValueError:
