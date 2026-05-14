@@ -17,14 +17,34 @@ from config import (
 import os
 
 
-def _notify_wa(message: str):
-    """Kirim notifikasi ke owner via WA bot (non-blocking, best-effort)."""
+def _notify_wa(message: str, key: str = "default"):
+    """
+    Kirim notifikasi ke owner via WA bot, max 1x per hari per key.
+    key: identifier unik per jenis alert (misal 'token_expiry', 'fb_session').
+    """
     import urllib.request, urllib.error, json as _json
+    from datetime import date
+
+    # Rate-limit: simpan tanggal terakhir kirim per key di data/notify_log.json
+    log_path = os.path.join("data", "notify_log.json")
+    today = str(date.today())
+    try:
+        log = _json.loads(open(log_path).read()) if os.path.exists(log_path) else {}
+    except Exception:
+        log = {}
+
+    if log.get(key) == today:
+        print(f"ℹ️ WA notify '{key}' sudah dikirim hari ini, skip.")
+        return
+
     wa_url = os.getenv("WA_NOTIFY_URL", "http://bantukos-wa-bot:3001/notify")
     try:
         data = _json.dumps({"message": message}).encode()
         req = urllib.request.Request(wa_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=5)
+        log[key] = today
+        open(log_path, "w").write(_json.dumps(log))
+        print(f"🔔 WA notify '{key}' terkirim.")
     except Exception as e:
         print(f"⚠️ WA notify gagal: {e}")
 
@@ -75,12 +95,14 @@ def _check_token_expiry():
                 f"Token Instagram akan expired dalam *{days_left} hari* ({expires_str})!\n\n"
                 f"Segera generate token baru:\n"
                 f"developers.facebook.com/tools/explorer\n\n"
-                f"Kirim token baru ke admin untuk di-update."
+                f"Kirim token baru ke admin untuk di-update.",
+                key="token_expiry_critical"
             )
         elif days_left <= 20:
             print(f"⚠️  Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!")
             _notify_wa(
-                f"⚠️ *Bantukos Bot*: Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!"
+                f"⚠️ *Bantukos Bot*: Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!",
+                key="token_expiry_warning"
             )
         else:
             print(f"✅ Token Instagram valid — {days_left} hari tersisa (expired: {expires_str})")
