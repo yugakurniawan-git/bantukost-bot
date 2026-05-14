@@ -42,6 +42,73 @@ def _sync_website_background():
     except Exception as e:
         print(f"⚠️ Sync website gagal: {e}")
 
+
+def _check_token_expiry():
+    """Cek Instagram access token mendekati expired dan cetak peringatan di log."""
+    from datetime import date
+    expires_str = os.getenv("INSTAGRAM_TOKEN_EXPIRES_AT", "")
+    if not expires_str:
+        return
+    try:
+        expires = date.fromisoformat(expires_str)
+        days_left = (expires - date.today()).days
+        if days_left <= 7:
+            print("\n" + "🚨" * 25)
+            print(f"🚨 TOKEN INSTAGRAM EXPIRED DALAM {days_left} HARI! ({expires_str})")
+            print("   → Generate token baru di: developers.facebook.com/tools/explorer")
+            print("   → Kirim ke admin untuk di-update ke server")
+            print("🚨" * 25 + "\n")
+        elif days_left <= 20:
+            print(f"⚠️  Token Instagram akan expired dalam {days_left} hari ({expires_str}). Segera renew!")
+        else:
+            print(f"✅ Token Instagram valid — {days_left} hari tersisa (expired: {expires_str})")
+    except ValueError:
+        print(f"⚠️ Format INSTAGRAM_TOKEN_EXPIRES_AT tidak valid: '{expires_str}' (gunakan YYYY-MM-DD)")
+
+
+def _batch_upload_cloudinary(max_posts: int = 30):
+    """Upload foto ke Cloudinary untuk captioned posts yang belum punya CDN URL."""
+    import sqlite3
+    import hashlib as _hashlib
+
+    db_path = os.path.join("data", "bantukos.db")
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("""
+        SELECT id, image_paths, location, price
+        FROM posts
+        WHERE status = 'captioned'
+          AND image_paths IS NOT NULL AND image_paths != ''
+          AND (cloudinary_urls IS NULL OR cloudinary_urls = '')
+        ORDER BY id DESC
+        LIMIT ?
+    """, (max_posts,)).fetchall()
+    conn.close()
+
+    if not rows:
+        return
+
+    print(f"\n☁️ Batch upload foto ke Cloudinary: {len(rows)} post belum punya CDN URL...")
+    uploaded = 0
+    for post_id, image_paths_str, location, price in rows:
+        paths = [
+            p.strip() for p in image_paths_str.split(",")
+            if p.strip() and os.path.exists(p.strip()) and "_wm" not in os.path.basename(p.strip())
+        ]
+        if not paths:
+            continue
+        target = add_watermark(paths[0], location=location or "", price=price or "")
+        url = upload_to_cloudinary(target)
+        if url:
+            save_cloudinary_urls(post_id, [url])
+            uploaded += 1
+
+    if uploaded > 0:
+        print(f"   ✅ {uploaded}/{len(rows)} foto berhasil di-upload ke Cloudinary")
+        _sync_website_background()
+    else:
+        print(f"   ℹ️ Tidak ada foto baru yang berhasil di-upload")
+
+
 def run_scraping(facebook_only: bool = False):
     """Jalankan scraping + generate caption. facebook_only=True untuk skip Mamikos."""
     print("\n" + "="*50)
@@ -52,6 +119,7 @@ def run_scraping(facebook_only: bool = False):
         scrape_mamikos()
     process_new_posts()
     get_stats()
+    _batch_upload_cloudinary(max_posts=30)
 
 def _parse_raw_text_for_card(raw_text: str) -> dict:
     """Ambil fasilitas, rating, unit_type dari raw_text untuk info card."""
@@ -86,8 +154,11 @@ def _upload_one_post(post) -> bool:
 
     # Siapkan foto
     # dict.fromkeys deduplikasi sambil jaga urutan — cegah carousel dengan slide identik
+    # Filter _wm.jpg: file watermark adalah hasil proses, bukan sumber asli.
+    # Kalau keduanya ada di DB, add_watermark akan buat _wm_wm.jpg (hash beda) → duplikat di IG.
     image_paths = list(dict.fromkeys(
-        p for p in (image_paths_str or "").split(",") if p.strip() and os.path.exists(p.strip())
+        p.strip() for p in (image_paths_str or "").split(",")
+        if p.strip() and os.path.exists(p.strip()) and "_wm" not in os.path.basename(p.strip())
     ))
 
     # ── Mamikos: prepend info card branded sebagai slide pertama ──────────
@@ -207,6 +278,7 @@ def run_scheduled(facebook_only: bool = True):
     print(f"   Posting setiap   : {POST_INTERVAL_HOURS} jam ({MAX_POSTS_PER_RUN} post terbaik/siklus)")
     print("   Prioritas upload : Foto > Lokasi detail > No HP > Harga > Teks")
     print("   Tekan Ctrl+C untuk berhenti\n")
+    _check_token_expiry()
 
     _scrape = lambda: run_scraping(facebook_only=facebook_only)
     _post   = lambda: run_posting(max_posts=MAX_POSTS_PER_RUN, source="facebook" if facebook_only else None)

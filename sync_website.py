@@ -35,34 +35,43 @@ SEEKING_KW = [
 ]
 
 
-def clean_location(loc: str) -> str:
+SUB_AREAS = [
+    "Monang-Maning", "Monang Maning", "Monanmaning",
+    "Sesetan", "Panjer", "Sidakarya", "Niti Mandala",
+    "Renon", "Kesiman", "Tonja", "Peguyangan",
+    "Pemogan", "Pedungan", "Serangan",
+    "Padangsambian", "Tegal Harum", "Tegal Kertha",
+    "Kerobokan", "Dalung", "Sempidi",
+    "Berawa", "Pererenan", "Batu Bolong",
+    "Canggu", "Seminyak", "Legian", "Kuta", "Tuban", "Kedonganan",
+    "Sanur", "Mertasari",
+    "Jimbaran", "Nusa Dua", "Tanjung Benoa",
+    "Ubud", "Mas", "Tegallalang",
+    "Gianyar", "Tabanan", "Mengwi",
+    "Gatsu", "Gatot Subroto",
+]
+
+BROAD_AREAS = ["Denpasar", "Badung", "Kuta", "Gianyar", "Tabanan"]
+
+
+def _find_sub_area(text: str) -> str | None:
+    text_lower = text.lower()
+    for area in SUB_AREAS:
+        if area.lower() in text_lower:
+            return area
+    return None
+
+
+def clean_location(loc: str, raw_text: str = "") -> str:
     if not loc:
-        return "Bali"
+        loc = ""
     loc = re.sub(r"[^\x00-\x7FÀ-ɏĀ-ſ\-]+", "", loc).strip()
     loc_lower = loc.lower()
 
-    # Sub-area spesifik — urutan penting, lebih spesifik dulu
-    sub_areas = [
-        "Monang-Maning", "Monang Maning", "Monanmaning",
-        "Sesetan", "Panjer", "Sidakarya", "Niti Mandala",
-        "Renon", "Kesiman", "Tonja", "Peguyangan",
-        "Pemogan", "Pedungan", "Serangan",
-        "Padangsambian", "Tegal Harum", "Tegal Kertha",
-        "Kerobokan", "Dalung", "Sempidi",
-        "Berawa", "Pererenan", "Batu Bolong",
-        "Canggu", "Seminyak", "Legian", "Kuta", "Tuban", "Kedonganan",
-        "Sanur", "Mertasari",
-        "Jimbaran", "Nusa Dua", "Tanjung Benoa",
-        "Ubud", "Mas", "Tegallalang",
-        "Gianyar", "Tabanan", "Mengwi",
-        "Gatsu", "Gatot Subroto",
-    ]
-
     found_sub = None
-    for area in sub_areas:
+    for area in SUB_AREAS:
         if area.lower() in loc_lower:
             found_sub = area
-            # Normalize ejaan
             loc = re.sub(re.escape(area), area, loc, flags=re.IGNORECASE, count=1)
             break
 
@@ -72,9 +81,7 @@ def clean_location(loc: str) -> str:
     ))
     if has_street:
         parts = [p.strip() for p in loc.split(",") if p.strip()]
-        # Ambil max 2 bagian paling depan (biasanya: jalan, sub-area)
         result = ", ".join(parts[:2])
-        # Singkatkan "Jalan" → "Jl.", "Gang" → "Gg."
         result = re.sub(r'\bjalan\s+', 'Jl. ', result, flags=re.IGNORECASE)
         result = re.sub(r'\bgang\s+', 'Gg. ', result, flags=re.IGNORECASE)
         return result[:50].strip(", ")
@@ -82,20 +89,35 @@ def clean_location(loc: str) -> str:
     if found_sub:
         return found_sub
 
-    # Broad areas sebagai fallback terakhir
-    for broad in ["Denpasar", "Badung", "Kuta", "Gianyar", "Tabanan"]:
+    # Broad areas — sebelum fallback, coba ekstrak dari raw_text
+    for broad in BROAD_AREAS:
         if broad.lower() in loc_lower:
+            # Lokasi hanya berisi area luas → coba cari sub-area dari raw_text
+            if raw_text:
+                sub_from_raw = _find_sub_area(raw_text)
+                if sub_from_raw:
+                    return sub_from_raw
             return broad
 
+    # loc terlalu generik ("Bali", kosong, dll) → coba raw_text
+    if raw_text:
+        sub_from_raw = _find_sub_area(raw_text)
+        if sub_from_raw:
+            return sub_from_raw
+        for broad in BROAD_AREAS:
+            if broad.lower() in raw_text.lower():
+                return broad
+
     parts = loc.split(",")
-    return parts[0].strip()[:35] if parts else "Bali"
+    return parts[0].strip()[:35] if parts and parts[0].strip() else "Bali"
 
 
 def normalize_price(price: str):
     if not price:
         return None
-    p = price.strip()
-    if "\n" in p or p in ("Hubungi pemilik", "N/A", ""):
+    # Take first non-empty line (handles "1.100.000\nK" etc.)
+    p = next((l.strip() for l in price.splitlines() if l.strip()), "")
+    if not p or p in ("Hubungi pemilik", "N/A"):
         return None
     # Mamikos format already clean
     if p.startswith("Rp ") and "/bulan" in p:
@@ -104,8 +126,19 @@ def normalize_price(price: str):
     m = re.search(r"[\d,\.]+", p_lower)
     if not m:
         return None
+    num_str = m.group()
+    # Indonesian thousand-separator: 1.100.000 → multiple dots → strip all dots
+    if num_str.count(".") > 1:
+        num_str = num_str.replace(".", "")
+    elif "," in num_str and "." in num_str:
+        if num_str.index(",") < num_str.index("."):
+            num_str = num_str.replace(",", "")          # 1,100.00
+        else:
+            num_str = num_str.replace(".", "").replace(",", ".")  # 1.100,00
+    else:
+        num_str = num_str.replace(",", ".")
     try:
-        num = float(m.group().replace(",", "."))
+        num = float(num_str)
     except ValueError:
         return None
     suffix = p_lower[m.end():]
@@ -115,7 +148,7 @@ def normalize_price(price: str):
         amt = int(num * 1_000)
     else:
         amt = int(num * 1_000_000) if num < 10 else int(num * 1_000) if num < 10_000 else int(num)
-    if amt < 100_000 or amt > 20_000_000:
+    if amt < 500_000 or amt > 20_000_000:
         return None
     if amt >= 1_000_000:
         label = f"{amt/1_000_000:.1f}".rstrip("0").rstrip(".")
@@ -156,7 +189,7 @@ def build_listings() -> list:
         SELECT id, location, price, raw_text, source, created_at,
                COALESCE(cloudinary_urls, '') as cloudinary_urls
         FROM posts
-        WHERE status = 'posted'
+        WHERE status IN ('posted', 'captioned')
         ORDER BY created_at DESC
     """)
     rows = c.fetchall()
@@ -173,7 +206,9 @@ def build_listings() -> list:
         if not price:
             continue
 
-        loc = clean_location(r["location"])
+        loc = clean_location(r["location"], raw)
+        if loc in ("Bali", "Denpasar", "Badung"):
+            continue
         dedup_key = (loc.lower(), price.lower())
         if dedup_key in seen:
             continue
