@@ -1,4 +1,5 @@
 import time
+import threading
 import subprocess
 import schedule
 from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls
@@ -330,14 +331,26 @@ def run_scheduled(facebook_only: bool = True):
     _scrape = lambda: run_scraping(facebook_only=facebook_only)
     _post   = lambda: run_posting(max_posts=MAX_POSTS_PER_RUN, source="facebook" if facebook_only else None)
 
+    # Lock agar tidak ada 2 outreach berjalan bersamaan
+    _outreach_lock = threading.Lock()
+
+    def _run_outreach_safe():
+        if _outreach_lock.acquire(blocking=False):
+            try:
+                run_outreach()
+            finally:
+                _outreach_lock.release()
+        else:
+            print("⏭️ Outreach masih berjalan, skip siklus ini.")
+
     schedule.every(SCRAPE_INTERVAL_MINUTES).minutes.do(_scrape)
     schedule.every(POST_INTERVAL_HOURS).hours.do(_post)
-    schedule.every(15).minutes.do(run_outreach)
+    schedule.every(15).minutes.do(_run_outreach_safe)
 
-    # Langsung jalankan sekali saat start
+    # Startup: outreach paralel dengan scraping (tidak saling tunggu)
+    threading.Thread(target=_run_outreach_safe, daemon=True).start()
     _scrape()
     _post()
-    run_outreach()
 
     while True:
         schedule.run_pending()
