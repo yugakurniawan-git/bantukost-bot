@@ -238,7 +238,6 @@ def build_listings() -> list:
             "source": r["source"] or "facebook",
             "posted_at": (r["created_at"] or "")[:10],
             "image_url": image_url,
-            "source_url": r["source_url"] or "",
         })
     return listings
 
