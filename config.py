@@ -90,7 +90,6 @@ MAX_POSTS_PER_RUN        = 2
 # ─── SupportKos Outreach ──────────────────────────────
 FB_SESSION_PATH  = os.getenv("FB_SESSION_PATH", "data/fb_session.json")
 WA_NOTIFY_URL    = os.getenv("WA_NOTIFY_URL", "http://bantukos-wa-bot:3001/notify")
-MAX_LEADS_PER_DAY = int(os.getenv("MAX_LEADS_PER_DAY", "10"))
 
 BALI_AREAS = [
     "canggu", "seminyak", "kuta", "legian", "kerobokan", "berawa", "pererenan",

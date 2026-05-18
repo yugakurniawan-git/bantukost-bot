@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from config import (
     FACEBOOK_GROUPS, SEEKING_KEYWORDS, OPENAI_API_KEY, DB_PATH,
-    FB_SESSION_PATH, WA_NOTIFY_URL, MAX_LEADS_PER_DAY, BALI_AREAS,
+    FB_SESSION_PATH, WA_NOTIFY_URL, BALI_AREAS,
 )
 from scraper import _discover_group_urls
 
@@ -497,7 +497,6 @@ def _process_post_comments(page, post_url: str) -> int:
         page.goto(post_url, wait_until="domcontentloaded", timeout=20000)
         time.sleep(random.randint(2, 4))
         for c in _extract_comments_info(page):
-            if count_leads_today() >= MAX_LEADS_PER_DAY: break
             c_text = c.get('text', '')
             if not c_text or not _is_seeking(c_text): continue
             c_key = f"outreach_cmt_{post_id}_{hashlib.md5(c_text.encode()).hexdigest()[:12]}"
@@ -539,13 +538,11 @@ def _scan_group_outreach(page, group_url: str) -> int:
 
     print("   📌 Pass 1: cek post utama...")
     for post_url in post_links:
-        if count_leads_today() >= MAX_LEADS_PER_DAY: return total
         total += _process_post_main(page, post_url)
         time.sleep(random.randint(2, 5))
 
     print("   💬 Pass 2: scan komentar...")
     for post_url in post_links:
-        if count_leads_today() >= MAX_LEADS_PER_DAY: break
         total += _process_post_comments(page, post_url)
         time.sleep(random.randint(2, 5))
 
@@ -558,12 +555,7 @@ def run_outreach():
         return
 
     init_outreach_db()
-    today_count = count_leads_today()
-    if today_count >= MAX_LEADS_PER_DAY:
-        print(f"⏸️ Batas lead harian tercapai ({today_count}/{MAX_LEADS_PER_DAY}).")
-        return
-
-    print(f"\n🎯 Outreach Scan — {today_count}/{MAX_LEADS_PER_DAY} leads hari ini")
+    print(f"\n🎯 Outreach Scan — {count_leads_today()} leads hari ini")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -595,9 +587,6 @@ def run_outreach():
 
         total_leads = 0
         for group_url in targets:
-            if count_leads_today() >= MAX_LEADS_PER_DAY:
-                print("⏸️ Batas harian tercapai.")
-                break
             print(f"\n📋 Outreach scan: {group_url}")
             total_leads += _scan_group_outreach(page, group_url)
             time.sleep(random.randint(10, 20))
@@ -605,4 +594,4 @@ def run_outreach():
         ctx.close()
         browser.close()
 
-    print(f"\n✅ Outreach selesai. Total leads: {count_leads_today()}/{MAX_LEADS_PER_DAY}")
+    print(f"\n✅ Outreach selesai. Total leads hari ini: {count_leads_today()}")
