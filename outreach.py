@@ -518,21 +518,65 @@ def _scan_group_outreach(page, group_url: str) -> int:
         print(f"   ⚠️ Gagal buka grup: {e}")
         return 0
 
-    for _ in range(6):
-        page.evaluate("window.scrollBy(0, 2000)")
-        time.sleep(random.randint(1, 3))
+    if "groups" not in page.url:
+        print("   ⚠️ Tidak bisa masuk grup, skip.")
+        return 0
 
-    post_links = page.evaluate("""
-        () => {
-            const links = new Set();
-            document.querySelectorAll('a[href]').forEach(a => {
-                const href = a.href || '';
-                if (href.includes('facebook.com') && /\\/posts\\/\\d+|story_fbid=\\d+/.test(href))
-                    links.add(href.split('?')[0]);
-            });
-            return [...links].slice(0, 30);
-        }
-    """)
+    # Klik tab Diskusi agar feed post tampil
+    clicked_tab = False
+    for tab_text in ["Diskusi", "Discussion", "Posts"]:
+        try:
+            tab = page.get_by_role("tab", name=tab_text)
+            if tab.count() > 0:
+                tab.first.click()
+                clicked_tab = True
+                print(f"   ✅ Tab: {tab_text}")
+                time.sleep(3)
+                break
+        except Exception:
+            pass
+    if not clicked_tab:
+        for label in ["Diskusi", "Discussion"]:
+            try:
+                page.get_by_text(label, exact=True).first.click()
+                time.sleep(3)
+                break
+            except Exception:
+                pass
+
+    # Sort by Terbaru
+    for sort_text in ["Postingan Terbaru", "Newest Posts", "Terbaru"]:
+        try:
+            btn = page.get_by_text(sort_text, exact=False).first
+            if btn.is_visible():
+                btn.click()
+                time.sleep(2)
+                break
+        except Exception:
+            pass
+
+    # Progressive scroll sambil kumpulkan URL post
+    post_links_set = set()
+    for step in range(20):
+        time.sleep(random.uniform(1.5, 2.5))
+        new_urls = page.evaluate("""
+            () => {
+                const links = [];
+                document.querySelectorAll('a[href]').forEach(a => {
+                    const href = a.href || '';
+                    if (href.includes('facebook.com') && /\\/posts\\/\\d+|story_fbid=\\d+/.test(href))
+                        links.push(href.split('?')[0]);
+                });
+                return links;
+            }
+        """)
+        before = len(post_links_set)
+        post_links_set.update(new_urls)
+        if step >= 10 and len(post_links_set) == before:
+            break
+        page.evaluate("window.scrollBy(0, 2000)")
+
+    post_links = list(post_links_set)[:30]
     print(f"   🔎 {len(post_links)} post ditemukan")
     total = 0
 
