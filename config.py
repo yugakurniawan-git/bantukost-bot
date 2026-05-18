@@ -87,6 +87,19 @@ POST_INTERVAL_HOURS      = 6    # posting tiap 6 jam (~4 post/hari — aman dari
 # Makin kecil = lebih aman. 2 per 6 jam = ~8 post/hari (batas aman IG ~20/hari)
 MAX_POSTS_PER_RUN        = 2
 
+# ─── SupportKos Outreach ──────────────────────────────
+FB_SESSION_PATH  = os.getenv("FB_SESSION_PATH", "data/fb_session.json")
+WA_NOTIFY_URL    = os.getenv("WA_NOTIFY_URL", "http://bantukos-wa-bot:3001/notify")
+MAX_LEADS_PER_DAY = int(os.getenv("MAX_LEADS_PER_DAY", "10"))
+
+BALI_AREAS = [
+    "canggu", "seminyak", "kuta", "legian", "kerobokan", "berawa", "pererenan",
+    "denpasar", "sesetan", "renon", "gatsu", "panjer", "kesiman", "sanur",
+    "padangsambian", "pemogan", "monang maning", "imam bonjol", "bypass",
+    "jimbaran", "nusa dua", "ubud", "mengwi", "tabanan", "gianyar",
+    "sukawati", "ketewel", "tohpati",
+]
+
 # ─── Filter Harga (opsional, 0 = tidak difilter) ──────
 MIN_PRICE = 0
 MAX_PRICE = 0

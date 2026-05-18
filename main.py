@@ -5,6 +5,7 @@ from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls
 from scraper import scrape_groups, extract_location as _clean_location
 from mamikos_scraper import scrape_mamikos
 from caption import process_new_posts
+from outreach import run_outreach, init_outreach_db
 from image import process_images, create_fallback_image, create_mamikos_info_card, add_watermark
 from uploader import post_to_instagram, upload_to_cloudinary
 from config import (
@@ -315,11 +316,13 @@ def run_scheduled(facebook_only: bool = True):
     facebook_only=True (default): hanya scrape Facebook, skip Mamikos.
     """
     init_db()
+    init_outreach_db()
     src_label = "Facebook saja" if facebook_only else "Facebook + Mamikos"
     print("\n🤖 Bantu Kos Bot dimulai!")
     print(f"   Sumber scraping  : {src_label}")
     print(f"   Scraping setiap  : {SCRAPE_INTERVAL_MINUTES} menit")
     print(f"   Posting setiap   : {POST_INTERVAL_HOURS} jam ({MAX_POSTS_PER_RUN} post terbaik/siklus)")
+    print(f"   Outreach setiap  : 15 menit")
     print("   Prioritas upload : Foto > Lokasi detail > No HP > Harga > Teks")
     print("   Tekan Ctrl+C untuk berhenti\n")
     _check_token_expiry()
@@ -329,10 +332,12 @@ def run_scheduled(facebook_only: bool = True):
 
     schedule.every(SCRAPE_INTERVAL_MINUTES).minutes.do(_scrape)
     schedule.every(POST_INTERVAL_HOURS).hours.do(_post)
+    schedule.every(15).minutes.do(run_outreach)
 
     # Langsung jalankan sekali saat start
     _scrape()
     _post()
+    run_outreach()
 
     while True:
         schedule.run_pending()
