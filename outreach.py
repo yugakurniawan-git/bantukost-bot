@@ -44,10 +44,33 @@ _OFFERING_SIGNALS = [
     "fasilitas:", "harga:", "tarif:", "biaya sewa",
 ]
 
+# Topik non-kos yang sering trigger SEEKING_KEYWORDS secara tidak sengaja
+_NOISE_TOPICS = [
+    "motor", "mobil", "kendaraan", "sepeda", "helm",
+    "penipuan", "penipu", "modus", "waspada", "hati-hati", "hati hati",
+    "warninggg", "scam", "lapor", "polisi", "dpo", "buron",
+    "jual beli", "dijual", "for sale", "lelang",
+    "lowongan", "loker", "kerja", "gaji", "rekrut",
+    "minuman", "makanan", "kuliner", "resto", "cafe",
+    "hilang", "kehilangan", "ditemukan",
+]
+
 def _is_seeking(text: str) -> bool:
     t = text.lower()
+    # Harus ada minimal 1 kata kunci pencari kos
     if not any(kw in t for kw in SEEKING_KEYWORDS):
         return False
+    # Skip kalau topiknya bukan tentang kos sama sekali
+    has_kos_context = any(kw in t for kw in [
+        "kos", "kost", "kamar", "kontrakan", "ngekos", "tempat tinggal",
+        "sewa", "ngontrak", "hunian",
+    ])
+    if not has_kos_context:
+        return False
+    # Skip kalau ada noise topic yang dominan
+    if sum(1 for n in _NOISE_TOPICS if n in t) >= 2:
+        return False
+    # Skip kalau banyak sinyal offering (ini post penawaran, bukan pencarian)
     if sum(1 for s in _OFFERING_SIGNALS if s in t) >= 2:
         return False
     return True
@@ -478,7 +501,7 @@ def _process_post_main(page, post_url: str) -> int:
     if already_notified(post_key):
         return 0
     try:
-        page.goto(post_url, wait_until="domcontentloaded", timeout=20000)
+        page.goto(post_url, wait_until="domcontentloaded", timeout=35000)
         time.sleep(random.randint(2, 4))
         post_text = _get_post_text(page)
         if not post_text or not _is_seeking(post_text):
@@ -494,7 +517,7 @@ def _process_post_main(page, post_url: str) -> int:
 def _process_post_comments(page, post_url: str) -> int:
     post_id, leads = _post_id_from_url(post_url), 0
     try:
-        page.goto(post_url, wait_until="domcontentloaded", timeout=20000)
+        page.goto(post_url, wait_until="domcontentloaded", timeout=35000)
         time.sleep(random.randint(2, 4))
         for c in _extract_comments_info(page):
             c_text = c.get('text', '')
