@@ -34,6 +34,13 @@ SEEKING_KW = [
     "looking for", "mau cari", "lagi cari", "mencari kos",
 ]
 
+# Postingan properti dijual/kavling — bukan kos sewa bulanan
+NON_KOS_KW = [
+    "dijual", "for sale", "kavling", "rumah dijual", "ruko dijual",
+    "tanah dijual", "villa dijual", "dp rumah", "kpr", "indent",
+    "over kredit", "oper kredit", "siap huni",
+]
+
 
 SUB_AREAS = [
     "Monang-Maning", "Monang Maning", "Monanmaning",
@@ -148,7 +155,7 @@ def normalize_price(price: str):
         amt = int(num * 1_000)
     else:
         amt = int(num * 1_000_000) if num < 10 else int(num * 1_000) if num < 10_000 else int(num)
-    if amt < 500_000 or amt > 20_000_000:
+    if amt < 500_000 or amt > 8_000_000:
         return None
     if amt >= 1_000_000:
         label = f"{amt/1_000_000:.1f}".rstrip("0").rstrip(".")
@@ -187,7 +194,8 @@ def build_listings() -> list:
     # cloudinary_urls mungkin belum ada di DB lama — pakai COALESCE
     c.execute("""
         SELECT id, location, price, raw_text, source, created_at,
-               COALESCE(cloudinary_urls, '') as cloudinary_urls
+               COALESCE(cloudinary_urls, '') as cloudinary_urls,
+               COALESCE(source_url, '') as source_url
         FROM posts
         WHERE status IN ('posted', 'captioned')
         ORDER BY created_at DESC
@@ -200,7 +208,10 @@ def build_listings() -> list:
 
     for r in rows:
         raw = r["raw_text"] or ""
-        if any(kw in raw.lower() for kw in SEEKING_KW):
+        raw_lower = raw.lower()
+        if any(kw in raw_lower for kw in SEEKING_KW):
+            continue
+        if any(kw in raw_lower for kw in NON_KOS_KW):
             continue
         price = normalize_price(r["price"])
         if not price:
@@ -227,6 +238,7 @@ def build_listings() -> list:
             "source": r["source"] or "facebook",
             "posted_at": (r["created_at"] or "")[:10],
             "image_url": image_url,
+            "source_url": r["source_url"] or "",
         })
     return listings
 
