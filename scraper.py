@@ -314,15 +314,15 @@ def get_post_urls_from_feed(page) -> list:
             // Cari semua link ke halaman post
             const links = document.querySelectorAll(
                 'a[href*="/groups/"][href*="/posts/"],' +
-                'a[href*="story_fbid="]'
+                'a[href*="story_fbid="],' +
+                'a[href*="/share/p/"]'
             );
             for (const a of links) {
                 let href = a.href || '';
-                // Normalkan: hapus query string kecuali story_fbid
                 if (href.includes('story_fbid=')) {
                     // sudah ada ID di query — biarkan
                 } else {
-                    href = href.split('?')[0];  // buang ?comment_id= dll
+                    href = href.split('?')[0];  // buang ?mibextid= dll
                 }
                 if (href && !seen.has(href)) {
                     seen.add(href);
@@ -342,7 +342,7 @@ def extract_post_url_from_element(page, post_el) -> str:
         url = page.evaluate("""
             (el) => {
                 const a = el.querySelector(
-                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="]'
+                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="], a[href*="/share/p/"]'
                 );
                 if (!a) return '';
                 let h = a.href || '';
@@ -745,7 +745,7 @@ def scrape_groups():
                             const seen = new Set();
                             const out  = [];
                             for (const a of document.querySelectorAll(
-                                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="]')) {
+                                    'a[href*="/groups/"][href*="/posts/"], a[href*="story_fbid="], a[href*="/share/p/"]')) {
                                 let h = a.href || '';
                                 if (!h.includes('story_fbid=')) h = h.split('?')[0];
                                 if (h && !seen.has(h)) { seen.add(h); out.push(h); }

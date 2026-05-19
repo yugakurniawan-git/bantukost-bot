@@ -33,6 +33,8 @@ def _post_id_from_url(url: str) -> str:
     if m: return m.group(1)
     m = re.search(r'story_fbid=(\d+)', url)
     if m: return m.group(1)
+    m = re.search(r'/share/p/([A-Za-z0-9]+)', url)
+    if m: return m.group(1)
     return hashlib.md5(url.encode()).hexdigest()[:16]
 
 
@@ -634,7 +636,8 @@ def _scan_group_outreach(page, group_url: str) -> int:
                 const links = [];
                 document.querySelectorAll('a[href]').forEach(a => {
                     const href = a.href || '';
-                    if (href.includes('facebook.com') && /\\/posts\\/\\d+|story_fbid=\\d+/.test(href))
+                    const isPost = /\/posts\/\d+|story_fbid=\d+|\/share\/p\//.test(href);
+                    if (href.includes('facebook.com') && isPost)
                         links.push(href.split('?')[0]);
                 });
                 return links;
