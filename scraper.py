@@ -3,10 +3,19 @@ import os
 import time
 import random
 import hashlib
+import requests
 from playwright.sync_api import sync_playwright
-from config import FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR
+from config import FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR, WA_NOTIFY_URL
 from database import is_duplicate, save_post
 from ocr import ocr_image, is_kos_flyer
+
+
+def _wa_system_alert(message: str):
+    """Kirim system alert ke WA pribadi owner (system=True → OWNER_NOTIFY_NUMBER)."""
+    try:
+        requests.post(WA_NOTIFY_URL, json={"message": message, "system": True}, timeout=8)
+    except Exception:
+        pass
 
 MAX_POSTS_PER_GROUP  = 25
 MAX_POSTS_PER_CYCLE  = 60
@@ -660,9 +669,16 @@ def scrape_groups():
                 # Handle login
                 if "login" in page.url or "checkpoint" in page.url:
                     if is_headless:
+                        msg = (
+                            "⚠️ *ALERT: Session Facebook Expired!*\n\n"
+                            "Bot tidak bisa scraping — session FB perlu di-refresh.\n\n"
+                            "Cara fix:\n"
+                            "1. Di lokal: `python3 facebook.py --export-session`\n"
+                            "2. Upload: `scp data/fb_session.json root@202.155.18.49:/tmp/fb_session.json`\n"
+                            "3. Kabarin aku untuk copy ke container"
+                        )
                         print("❌ Session Facebook expired atau ditolak (IP server berbeda).")
-                        print("   Di lokal: python3 facebook.py --export-session")
-                        print("   Lalu: scp data/fb_session.json root@server:/data/bantukos/fb_session.json")
+                        _wa_system_alert(msg)
                         return
                     print("⚠️ Facebook minta login manual...")
                     print("   Login di browser yang terbuka, lalu tekan Enter.")

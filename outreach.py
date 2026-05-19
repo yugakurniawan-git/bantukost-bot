@@ -771,6 +771,20 @@ def run_outreach():
         time.sleep(3)
         if "login" in page.url or "checkpoint" in page.url:
             print("❌ Session FB expired. Perlu re-export session.")
+            try:
+                requests.post(WA_NOTIFY_URL, json={
+                    "message": (
+                        "⚠️ *ALERT: Session Facebook Expired!*\n\n"
+                        "Outreach berhenti — session FB perlu di-refresh.\n\n"
+                        "Cara fix:\n"
+                        "1. Di lokal: `python3 facebook.py --export-session`\n"
+                        "2. Upload: `scp data/fb_session.json root@202.155.18.49:/tmp/fb_session.json`\n"
+                        "3. Kabarin aku untuk copy ke container"
+                    ),
+                    "system": True
+                }, timeout=8)
+            except Exception:
+                pass
             ctx.close(); browser.close()
             return
 
