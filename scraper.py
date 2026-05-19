@@ -443,93 +443,159 @@ KOS_GROUP_KEYWORDS = [
 ]
 SKIP_GROUPS = ["feed", "discover", "create", "you", "joins", "search"]
 
+def _collect_group_links(page) -> list:
+    """Ambil semua link grup dari halaman saat ini, termasuk dari sidebar kiri."""
+    return page.evaluate("""
+        () => {
+            const found = [];
+            const seen = new Set();
+
+            function extractFromEl(a) {
+                const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._-]+)\\/?/);
+                if (!m) return;
+                const gid = m[1];
+                if (seen.has(gid)) return;
+                // Skip halaman generik FB Groups
+                if (['feed', 'discover', 'joined', 'manage', 'create', 'notifications'].includes(gid)) return;
+                seen.add(gid);
+
+                let name = (a.innerText || a.textContent || '').trim();
+                if (!name) name = (a.getAttribute('aria-label') || a.getAttribute('title') || '').trim();
+                if (!name) {
+                    const inner = a.querySelector('span[dir="auto"], span, strong');
+                    if (inner) name = inner.innerText.trim();
+                }
+                if (!name && a.parentElement) {
+                    const ps = a.parentElement.querySelector('span[dir="auto"]');
+                    if (ps) name = ps.innerText.trim();
+                }
+                // Bersihkan nama dari newlines dan spasi lebih
+                name = name.replace(/\\s+/g, ' ').trim();
+                found.push({ url: 'https://www.facebook.com/groups/' + gid + '/', name, id: gid });
+            }
+
+            document.querySelectorAll('a[href*="/groups/"]').forEach(extractFromEl);
+            return found;
+        }
+    """)
+
+
 def _discover_group_urls(page) -> list:
     """
-    Auto-discover grup yang diikuti akun, filter hanya grup kos/sewa.
-    Kalau nama grup tidak terbaca, tetap disertakan agar tidak terlewat.
+    Auto-discover semua grup yang diikuti akun, filter hanya grup kos/sewa.
+    Mencari di sidebar kiri + halaman joined groups.
     """
     print("   🔍 Auto-discover grup kos dari akun...")
+    all_groups = {}
+
+    def _process_groups(raw_list):
+        for g in raw_list:
+            gid = g.get("id", "")
+            if gid and gid not in all_groups:
+                all_groups[gid] = g
+
     try:
+        # ── Pass 1: Halaman /groups/ + scroll sidebar kiri ──
         page.goto("https://www.facebook.com/groups/", wait_until="domcontentloaded", timeout=30000)
         time.sleep(4)
-        for _ in range(8):
-            page.evaluate("window.scrollBy(0, 1500)")
-            time.sleep(1)
 
-        groups = page.evaluate("""
+        # Coba klik "Lihat semua" / "See all" di sidebar groups
+        for see_all_text in ["Lihat semua", "See all", "Lihat Semua"]:
+            try:
+                btn = page.get_by_text(see_all_text, exact=True).first
+                if btn.is_visible(timeout=2000):
+                    btn.click()
+                    time.sleep(2)
+                    print(f"   ✅ Klik '{see_all_text}'")
+                    break
+            except Exception:
+                pass
+
+        # Scroll sidebar kiri (bukan main feed)
+        page.evaluate("""
             () => {
-                const found = [];
-                document.querySelectorAll('a[href*="/groups/"]').forEach(a => {
-                    const m = (a.href || '').match(/facebook\\.com\\/groups\\/(\\d+|[a-zA-Z0-9._-]+)\\/?/);
-                    if (!m) return;
-
-                    // Coba ambil nama dari berbagai sumber
-                    let name = (a.innerText || a.textContent || '').trim();
-
-                    // Coba dari aria-label
-                    if (!name) name = (a.getAttribute('aria-label') || '').trim();
-
-                    // Coba dari title
-                    if (!name) name = (a.getAttribute('title') || '').trim();
-
-                    // Coba dari span/strong di dalam link
-                    if (!name) {
-                        const inner = a.querySelector('span, strong');
-                        if (inner) name = inner.innerText.trim();
+                const selectors = [
+                    '[data-pagelet="LeftRail"]',
+                    'nav[role="navigation"]',
+                    '[role="complementary"]',
+                    '[aria-label*="roup" i]',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.scrollHeight > el.clientHeight) {
+                        for (let i = 0; i < 15; i++) el.scrollBy(0, 400);
+                        return true;
                     }
-
-                    // Coba dari parent element
-                    if (!name && a.parentElement) {
-                        const parentSpan = a.parentElement.querySelector('span[dir="auto"], span[class*="name"]');
-                        if (parentSpan) name = parentSpan.innerText.trim();
-                    }
-
-                    found.push({ url: 'https://www.facebook.com/groups/' + m[1] + '/', name, id: m[1] });
-                });
-                return found;
+                }
+                return false;
             }
         """)
+        time.sleep(2)
 
-        filtered = []
-        skipped = []
-        no_name = []
-        seen = set()
+        # Scroll main content juga untuk ambil link yang muncul di feed
+        for _ in range(10):
+            page.evaluate("window.scrollBy(0, 1500)")
+            time.sleep(0.8)
 
-        for g in groups:
-            gid = g.get("id", "")
-            name = g.get("name", "").strip()
-            name_lower = name.lower()
-            url = g.get("url", "")
+        _process_groups(_collect_group_links(page))
 
-            if gid in SKIP_GROUPS or gid in seen:
-                continue
-            seen.add(gid)
+        # ── Pass 2: Halaman /groups/joined/ ──
+        try:
+            page.goto("https://www.facebook.com/groups/joined/", wait_until="domcontentloaded", timeout=20000)
+            time.sleep(3)
+            for _ in range(12):
+                page.evaluate("window.scrollBy(0, 1500)")
+                time.sleep(0.8)
+            _process_groups(_collect_group_links(page))
+            print(f"   📄 /groups/joined/ — {len(all_groups)} grup total sejauh ini")
+        except Exception as e:
+            print(f"   ⚠️ /groups/joined/ gagal: {e}")
 
-            if any(kw in name_lower for kw in KOS_GROUP_KEYWORDS):
-                filtered.append(url)
-                print(f"   ✅ {name or gid}")
-            elif not name:
-                # Nama tidak terbaca — tetap masukkan, biarkan filter konten yang handle
-                no_name.append(url)
-            else:
-                skipped.append(name or gid)
+        # ── Pass 3: Halaman /groups/manage/ ──
+        try:
+            page.goto("https://www.facebook.com/groups/manage/", wait_until="domcontentloaded", timeout=20000)
+            time.sleep(3)
+            for _ in range(6):
+                page.evaluate("window.scrollBy(0, 1500)")
+                time.sleep(0.8)
+            _process_groups(_collect_group_links(page))
+            print(f"   📄 /groups/manage/ — {len(all_groups)} grup total sejauh ini")
+        except Exception as e:
+            print(f"   ⚠️ /groups/manage/ gagal: {e}")
 
-        print(f"   📊 Ditemukan: {len(seen)} grup total | kos: {len(filtered)} | tanpa nama: {len(no_name)} | non-kos: {len(skipped)}")
-
-        if skipped:
-            print(f"   ⏭️  Skip non-kos: {', '.join(skipped[:5])}" +
-                  (f" +{len(skipped)-5} lainnya" if len(skipped) > 5 else ""))
-
-        # Kalau tidak ada grup kos terdeteksi, sertakan grup tanpa nama sebagai fallback
-        if not filtered and no_name:
-            print(f"   ⚠️ Nama grup tidak terbaca, coba {len(no_name)} grup tanpa nama...")
-            filtered = no_name
-
-        print(f"   📋 Total grup yang akan di-scan: {len(filtered)}")
-        return filtered
     except Exception as e:
         print(f"   ⚠️ Gagal discover grup: {e}")
         return []
+
+    # ── Filter ──
+    filtered, skipped, no_name = [], [], []
+    for gid, g in all_groups.items():
+        if gid in SKIP_GROUPS:
+            continue
+        name = g.get("name", "").strip()
+        name_lower = name.lower()
+        url = g.get("url", "")
+
+        if any(kw in name_lower for kw in KOS_GROUP_KEYWORDS):
+            filtered.append(url)
+            print(f"   ✅ {name or gid}")
+        elif not name:
+            no_name.append(url)
+        else:
+            skipped.append(name or gid)
+
+    print(f"   📊 Ditemukan: {len(all_groups)} grup total | kos: {len(filtered)} | tanpa nama: {len(no_name)} | non-kos: {len(skipped)}")
+    if skipped:
+        print(f"   ⏭️  Skip non-kos: {', '.join(skipped[:5])}" +
+              (f" +{len(skipped)-5} lainnya" if len(skipped) > 5 else ""))
+
+    # Kalau tidak ada grup kos terdeteksi, sertakan grup tanpa nama sebagai fallback
+    if not filtered and no_name:
+        print(f"   ⚠️ Nama grup tidak terbaca, coba {len(no_name)} grup tanpa nama...")
+        filtered = no_name
+
+    print(f"   📋 Total grup yang akan di-scan: {len(filtered)}")
+    return filtered
 
 
 def scrape_groups():
