@@ -222,14 +222,19 @@ def _extract_wa_number(text: str) -> str:
 def _extract_poster_info(page) -> tuple[str, str]:
     result = page.evaluate("""
         () => {
+            // Scope ke article post utama agar tidak ambil nama dari sidebar/friend suggestions
+            const root = document.querySelector(
+                '[role="article"]:not([aria-label*="omment"]):not([aria-label*="Comment"])'
+            ) || document.querySelector('[data-pagelet*="FeedUnit"]') || document;
+
             const selectors = [
+                '[data-ad-rendering-role="profile_name"] a',
                 'h2 a[href*="facebook.com"]', 'h3 a[href*="facebook.com"]',
                 'strong a[href*="facebook.com"]',
-                '[data-ad-rendering-role="profile_name"] a',
                 'a[role="link"][href*="/user/"]', 'a[role="link"][href*="profile.php"]',
             ];
             for (const sel of selectors) {
-                const el = document.querySelector(sel);
+                const el = root.querySelector(sel);
                 if (el) {
                     const name = (el.innerText || el.textContent || '').trim();
                     let href = el.href || '';
@@ -241,7 +246,8 @@ def _extract_poster_info(page) -> tuple[str, str]:
                             href = u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
                         }
                     } catch(e) {}
-                    if (name && href.includes('facebook.com')) return [name, href];
+                    // Pastikan nama bukan nama grup (biasanya > 30 karakter atau all caps)
+                    if (name && name.length < 60 && href.includes('facebook.com')) return [name, href];
                 }
             }
             return ['', ''];
@@ -697,11 +703,20 @@ def run_outreach():
             ctx.close(); browser.close()
             return
 
-        targets = FACEBOOK_GROUPS if FACEBOOK_GROUPS else _discover_group_urls(page)
+        # Selalu gabungkan hardcoded + auto-discover supaya semua grup kos ter-cover
+        discovered = _discover_group_urls(page)
+        seen_ids = set()
+        targets = []
+        for url in list(FACEBOOK_GROUPS) + list(discovered):
+            gid = url.rstrip('/').split('/')[-1]
+            if gid not in seen_ids:
+                seen_ids.add(gid)
+                targets.append(url)
         if not targets:
             print("⚠️ Tidak ada grup ditemukan.")
             ctx.close(); browser.close()
             return
+        print(f"   📋 Total grup outreach: {len(targets)} ({len(FACEBOOK_GROUPS)} hardcoded + {len(targets)-len(FACEBOOK_GROUPS)} auto-discovered)")
 
         total_leads = 0
         for group_url in targets:
