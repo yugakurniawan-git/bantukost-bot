@@ -16,6 +16,7 @@ FACEBOOK_GROUPS = [
     "https://www.facebook.com/groups/1380894039527782/",  # INFO KOS SESETAN / Denpasar
     "https://www.facebook.com/groups/1474790899487041/",  # Kos dan Kontrakan Bali
     "https://www.facebook.com/groups/infokossesetan/",    # Info kos-kosan di Bali Denpasar
+    "https://www.facebook.com/groups/2910563342557517/",  # Info Kost Denpasar Dan Sekitarnya
 ]
 
 # Kata kunci WAJIB ada — postingan harus mengandung salah satu ini
