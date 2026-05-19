@@ -55,6 +55,47 @@ _NOISE_TOPICS = [
     "hilang", "kehilangan", "ditemukan",
 ]
 
+_INTEREST_PHRASES = [
+    # Tanya ketersediaan
+    "masih ada", "masih kosong", "masih tersedia", "masih available",
+    "ada yang kosong", "ada kamar", "ada unit",
+    # Tanya harga / kontak
+    "berapa per bulan", "berapa harganya", "berapa sebulan", "harga berapa",
+    "berapa perbulan", "berapa /bulan", "berapa/bulan",
+    "wa nya", "nomor wa", "kontaknya", "no wa", "nomer wa",
+    "bisa hub", "bisa dihub", "bisa contact", "ada kontak",
+    "boleh tau", "boleh minta", "share nomor",
+    # Minat
+    "minat", "tertarik", "interested", "mau dong", "mau kak",
+    "mau kos", "mau kost", "mau sewa", "mau ngekos",
+    "pengen kos", "pengen ngekos", "pengen sewa",
+    # Tanya info
+    "info dong", "info nya", "info lengkap", "detail dong",
+    "fasilitas apa", "ada foto", "ada gambar",
+    # Lokasi + niat
+    "deket situ", "dekat sana", "masih buka",
+    "bisa ditempati", "siap huni", "ready ga", "ready gak",
+]
+
+
+def _is_interested_commenter(text: str) -> bool:
+    """Dipakai untuk Pass 2 (komentar di post kos). Lebih longgar dari _is_seeking()
+    karena si komentator sudah ada di post kos — ekspresi minat pendek sudah cukup."""
+    if len(text) < 5:
+        return False
+    t = text.lower()
+    # Skip komentar yang jelas bukan minat (noise topics)
+    if sum(1 for n in _NOISE_TOPICS if n in t) >= 2:
+        return False
+    # Match interest phrases
+    if any(phrase in t for phrase in _INTEREST_PHRASES):
+        return True
+    # Fallback: juga cek seeking keywords untuk komentar panjang
+    if len(text) > 40 and _is_seeking(text):
+        return True
+    return False
+
+
 def _is_seeking(text: str) -> bool:
     t = text.lower()
     # Harus ada minimal 1 kata kunci pencari kos
@@ -219,7 +260,7 @@ def _extract_comments_info(page) -> list[dict]:
             document.querySelectorAll('[data-commentid], [aria-label*="Comment by"]').forEach(el => {
                 const textEl = el.querySelector('div[dir="auto"]');
                 const text = textEl ? textEl.innerText.trim() : '';
-                if (!text || text.length < 15 || text.length > 600) return;
+                if (!text || text.length < 5 || text.length > 600) return;
 
                 const nameEl = el.querySelector('a[href*="facebook.com"] span, strong a');
                 const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
@@ -521,7 +562,7 @@ def _process_post_comments(page, post_url: str) -> int:
         time.sleep(random.randint(2, 4))
         for c in _extract_comments_info(page):
             c_text = c.get('text', '')
-            if not c_text or not _is_seeking(c_text): continue
+            if not c_text or not _is_interested_commenter(c_text): continue
             c_key = f"outreach_cmt_{post_id}_{hashlib.md5(c_text.encode()).hexdigest()[:12]}"
             if already_notified(c_key): continue
             if _handle_lead(page, c.get('commentUrl') or post_url, c_text,
