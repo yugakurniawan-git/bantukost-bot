@@ -98,6 +98,16 @@ def _is_interested_commenter(text: str) -> bool:
     return False
 
 
+_MARKETING_PHRASES = [
+    # Kalimat kondisional — pemilik kos yang targeting pencari, bukan pencari itu sendiri
+    "kalau mau cari", "kalo mau cari", "buat yang cari", "bagi yang cari",
+    "bagi yang sedang cari", "untuk yang cari", "buat yang lagi cari",
+    "kalo kamu lagi cari", "kalau kamu cari", "kalau ada yang cari",
+    "kalo ada yang cari", "kalau ada yang butuh", "kalo ada yang butuh",
+    "buat yang butuh kos", "bagi yang butuh kos", "untuk yang butuh kos",
+    "yang lagi nyari kos", "yang sedang cari kos", "yang mau ngekos",
+]
+
 def _is_seeking(text: str) -> bool:
     t = text.lower()
     # Harus ada minimal 1 kata kunci pencari kos
@@ -113,6 +123,10 @@ def _is_seeking(text: str) -> bool:
     # Skip kalau ada noise topic yang dominan
     if sum(1 for n in _NOISE_TOPICS if n in t) >= 2:
         return False
+    # Skip kalau ada frasa marketing (pemilik kos targeting pencari, bukan pencari sendiri)
+    if any(phrase in t for phrase in _MARKETING_PHRASES):
+        if any(s in t for s in _OFFERING_SIGNALS):
+            return False
     # Skip kalau banyak sinyal offering (ini post penawaran, bukan pencarian)
     if sum(1 for s in _OFFERING_SIGNALS if s in t) >= 2:
         return False
@@ -358,7 +372,50 @@ def _extract_street_detail(location: str, raw_text: str, base_area: str) -> str:
     return loc_clean or base_area
 
 
-def _get_listings_for_area(location: str, limit: int = 3) -> list[dict]:
+def _parse_price_to_int(price_str: str) -> int:
+    """Konversi string harga ke integer rupiah. Return 0 jika gagal."""
+    try:
+        p = price_str.lower().replace('.', '').replace(',', '.')
+        m = re.search(r'([\d.]+)\s*(jt|juta|rb|ribu|k)?', p)
+        if not m: return 0
+        num = float(m.group(1))
+        suffix = (m.group(2) or '').strip()
+        if suffix in ('jt', 'juta'): return int(num * 1_000_000)
+        if suffix in ('rb', 'ribu', 'k'): return int(num * 1_000)
+        return int(num * 1_000_000) if num < 100 else int(num * 1_000) if num < 10_000 else int(num)
+    except Exception:
+        return 0
+
+
+def _extract_budget_from_text(text: str) -> int:
+    """Ekstrak budget maksimum dari teks pencarian. Return 0 jika tidak disebutkan."""
+    t = text.lower()
+    patterns = [
+        r'(?:di\s*bawah|max|maksimal|budget|bajed|maksimal|kurang dari|<=|<)\s*(\d[\d.,]*)\s*(jt|juta|rb|ribu|k|jt)?',
+        r'(\d[\d.,]*)\s*(jt|juta|rb|ribu|k)\s*(?:ke\s*bawah|kebawah|doang|aja|saja)',
+        r'(\d[\d.,]*)\s*(jt|juta|rb|ribu|k)\s*(?:/\s*(?:bulan|bln))?(?:\s|$)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, t)
+        if m:
+            raw = m.group(1)
+            # "1.5" atau "1,5" = desimal; "1.500" = ribuan
+            if re.search(r'[.,]\d{1,2}$', raw):
+                num_str = raw.replace(',', '.')  # desimal
+            else:
+                num_str = raw.replace('.', '').replace(',', '')  # ribuan
+            suffix = (m.group(2) or '').strip() if len(m.groups()) > 1 else ''
+            try:
+                num = float(num_str)
+                if suffix in ('jt', 'juta'): return int(num * 1_000_000)
+                if suffix in ('rb', 'ribu', 'k'): return int(num * 1_000)
+                return int(num * 1_000_000) if num < 100 else int(num * 1_000) if num < 10_000 else int(num)
+            except Exception:
+                pass
+    return 0
+
+
+def _get_listings_for_area(location: str, limit: int = 3, max_price: int = 0) -> list[dict]:
     try:
         conn = sqlite3.connect(DB_PATH)
         area_kw = location.lower().split()[0] if location else ''
@@ -372,7 +429,7 @@ def _get_listings_for_area(location: str, limit: int = 3) -> list[dict]:
               AND price NOT LIKE '%Hubungi%'
               AND price NOT LIKE '%N/A%'
               AND location NOT LIKE '%Bali%'
-            ORDER BY RANDOM() LIMIT 30
+            ORDER BY RANDOM() LIMIT 50
         """, (f'%{area_kw}%',)).fetchall()
         conn.close()
 
@@ -381,17 +438,16 @@ def _get_listings_for_area(location: str, limit: int = 3) -> list[dict]:
             if not loc_raw: continue
             clean_p = _clean_price(price_raw)
             if not clean_p: continue
+            # Filter harga kalau ada budget dari client
+            if max_price > 0:
+                listing_price = _parse_price_to_int(clean_p)
+                if listing_price > max_price:
+                    continue
             loc_display = _extract_street_detail(loc_raw, raw_text, location)
             loc_key = loc_display.lower().strip()
             if loc_key in seen_locs: continue
             seen_locs.add(loc_key)
-            wa = ''
-            if contact_raw:
-                wa_m = re.search(r'(\+?62[\d\s-]{8,14}|0[\d\s-]{9,13})', contact_raw)
-                if wa_m:
-                    wa = re.sub(r'[\s-]', '', wa_m.group(1))
-                    if wa.startswith('0'): wa = '62' + wa[1:]
-            results.append({'location': loc_display, 'price': clean_p, 'wa': wa})
+            results.append({'location': loc_display, 'price': clean_p})
             if len(results) >= limit: break
         return results
     except Exception as e:
@@ -412,10 +468,8 @@ _CLOSING = (
 def _format_listings_block(listings: list[dict]) -> str:
     lines = []
     for l in listings:
-        line = f"• {l['location']} — {l['price']}"
-        if l.get('wa'):
-            line += f" (WA owner: {l['wa']})"
-        lines.append(line)
+        # Tidak tampilkan WA owner — client harus tanya Bantukos dulu
+        lines.append(f"• {l['location']} — {l['price']}")
     return '\n'.join(lines)
 
 
@@ -423,21 +477,35 @@ def generate_dm_draft(poster_name: str, post_text: str, location: str, via_wa: b
     first_name = poster_name.split()[0] if poster_name else ""
     name_part  = f"Kak {first_name}" if first_name else "Kak"
     loc        = location or "Bali"
-    listings   = _get_listings_for_area(loc)
-    listing_intro = (
-        f"Ada beberapa yang lagi kosong di {loc}:\n{_format_listings_block(listings)}"
-        if listings else f"Bisa cek listing kos di {loc} di bantukos.com/listings ya."
+
+    # Ekstrak budget dari post client
+    max_price  = _extract_budget_from_text(post_text)
+    budget_note = f" (budget ≤ Rp {max_price//1000}rb/bln)" if max_price else ""
+
+    listings   = _get_listings_for_area(loc, max_price=max_price)
+    if not listings and max_price:
+        # Coba tanpa filter harga kalau tidak ada yang cocok
+        listings = _get_listings_for_area(loc)
+
+    if listings:
+        listing_intro = f"Ada beberapa yang lagi kosong di {loc}{budget_note}:\n{_format_listings_block(listings)}"
+    else:
+        listing_intro = f"Untuk detail kos yang tersedia di {loc}, bisa langsung tanya ke aku ya kak, aku bantu cariin 🙏"
+
+    closing = (
+        "untuk info lebih lanjut atau mau liat langsung, balas aja di sini ya kak 🙏\n\n"
+        "btw, saya bukan calo ya kak — aku cuman bantu connect ke owner kost yang emang lagi kosong. "
+        "kalo kakak butuh bantuan lebih (misalnya lagi di luar kota atau gak sempat survey), aku bisa bantu juga 😊"
     )
 
     if not OPENAI_API_KEY:
-        return f"Halo {name_part}, kebetulan tau ada kos di {loc} nih 👋\n\n{listing_intro}\n\n{_CLOSING}"
+        return f"Halo {name_part}, kebetulan tau ada kos di {loc} nih 👋\n\n{listing_intro}\n\n{closing}"
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
         prompt = f"""Kamu seorang teman yang genuinely mau bantu orang cari kos.
 
-Seseorang bernama "{name_part}" lagi cari kos di {loc}.
+Seseorang bernama "{name_part}" lagi cari kos di {loc}{budget_note}.
 Post mereka: "{post_text[:200]}"
 
 Tulis HANYA bagian pembuka pesannya saja (2-3 kalimat): sapaan natural + sebutkan listing di bawah ini secara apa adanya:
@@ -446,7 +514,7 @@ Tulis HANYA bagian pembuka pesannya saja (2-3 kalimat): sapaan natural + sebutka
 
 Aturan:
 - Santai, kayak teman, bukan agen
-- Sebutkan listing di atas apa adanya (lokasi + harga + WA owner kalau ada)
+- Sebutkan listing di atas (lokasi + harga saja, JANGAN sebut nomor WA/kontak siapapun)
 - Bahasa gaul/sehari-hari
 - JANGAN tambahkan penutup atau ajakan — sudah ditulis terpisah
 - Tulis isi pesan saja, tanpa tanda kutip"""
@@ -457,10 +525,10 @@ Aturan:
             max_tokens=200, temperature=1.0,
         )
         opener = response.choices[0].message.content.strip().strip('"').strip("'")
-        return f"{opener}\n\n{_CLOSING}"
+        return f"{opener}\n\n{closing}"
     except Exception as e:
         print(f"⚠️ OpenAI gagal, pakai template: {e}")
-        return f"Halo {name_part}, kebetulan tau ada kos di {loc} nih 👋\n\n{listing_intro}\n\n{_CLOSING}"
+        return f"Halo {name_part}, kebetulan tau ada kos di {loc} nih 👋\n\n{listing_intro}\n\n{closing}"
 
 
 # ── WA Notify ─────────────────────────────────────────────────────────────────
