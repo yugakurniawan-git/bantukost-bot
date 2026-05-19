@@ -77,6 +77,65 @@ def _sync_website_background():
         print(f"⚠️ Sync website gagal: {e}")
 
 
+def _refresh_ig_token():
+    """
+    Auto-refresh Instagram long-lived token setiap minggu.
+    Token yang masih valid diperpanjang 60 hari. Hasilnya ditulis ke /app/.env.
+    """
+    import requests
+    from config import INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_BUSINESS_ID
+    if not INSTAGRAM_ACCESS_TOKEN:
+        return
+    try:
+        resp = requests.get(
+            "https://graph.instagram.com/refresh_access_token",
+            params={"grant_type": "ig_refresh_token", "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=15,
+        )
+        data = resp.json()
+        new_token = data.get("access_token", "")
+        expires_in = data.get("expires_in", 0)  # seconds
+        if not new_token:
+            err = data.get("error", {}).get("message", str(data))
+            print(f"⚠️ Token refresh gagal: {err}")
+            _notify_wa(f"⚠️ *Bantukos Bot*: Gagal auto-refresh token Instagram!\n\n{err}\n\nSegera update manual di Coolify.", key="token_refresh_fail")
+            return
+
+        days_left = round(expires_in / 86400)
+        print(f"✅ Token Instagram di-refresh! Berlaku {days_left} hari lagi.")
+
+        # Update /app/.env agar persisten sampai restart berikutnya
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        lines = []
+        found = False
+        if os.path.exists(env_path):
+            for line in open(env_path):
+                if line.startswith("INSTAGRAM_ACCESS_TOKEN="):
+                    lines.append(f"INSTAGRAM_ACCESS_TOKEN={new_token}\n")
+                    found = True
+                else:
+                    lines.append(line)
+        if not found:
+            lines.append(f"INSTAGRAM_ACCESS_TOKEN={new_token}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+
+        # Patch config module in-memory agar siklus posting berikutnya pakai token baru
+        import config as _cfg
+        _cfg.INSTAGRAM_ACCESS_TOKEN = new_token
+        import uploader as _up
+        _up.INSTAGRAM_ACCESS_TOKEN = new_token
+
+        _notify_wa(
+            f"✅ *Bantukos Bot*: Token Instagram berhasil di-refresh otomatis.\n"
+            f"Berlaku {days_left} hari lagi.\n\n"
+            f"Update juga di Coolify env agar permanen setelah redeploy.",
+            key="token_refresh_ok"
+        )
+    except Exception as e:
+        print(f"⚠️ Token refresh error: {e}")
+
+
 def _check_token_expiry():
     """Cek Instagram access token mendekati expired dan cetak peringatan di log."""
     from datetime import date
@@ -346,6 +405,7 @@ def run_scheduled(facebook_only: bool = True):
     schedule.every(SCRAPE_INTERVAL_MINUTES).minutes.do(_scrape)
     schedule.every(POST_INTERVAL_HOURS).hours.do(_post)
     schedule.every(15).minutes.do(_run_outreach_safe)
+    schedule.every(7).days.do(_refresh_ig_token)
 
     # Startup: outreach paralel dengan scraping (tidak saling tunggu)
     threading.Thread(target=_run_outreach_safe, daemon=True).start()

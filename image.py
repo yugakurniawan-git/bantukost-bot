@@ -19,6 +19,19 @@ def add_watermark(image_path: str, location: str = "", price: str = "") -> str:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
             width, height = img.size
 
+        # Enforce Instagram aspect ratio: min 4:5 (0.8), max 1.91:1
+        # Terlalu portrait → center-crop ke 4:5
+        ratio = width / height
+        if ratio < 0.8:
+            new_w = int(height * 0.8)
+            left = (width - new_w) // 2
+            img = img.crop((left, 0, left + new_w, height))
+        elif ratio > 1.91:
+            new_h = int(width / 1.91)
+            top = (height - new_h) // 2
+            img = img.crop((0, top, width, top + new_h))
+        width, height = img.size
+
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         draw    = ImageDraw.Draw(overlay)
 
