@@ -639,7 +639,17 @@ def run_outreach():
             ),
         )
         page = ctx.new_page()
-        page.goto("https://www.facebook.com", wait_until="domcontentloaded", timeout=30000)
+        for _attempt in range(2):
+            try:
+                page.goto("https://www.facebook.com", wait_until="domcontentloaded", timeout=60000)
+                break
+            except Exception as _e:
+                if _attempt == 1:
+                    print(f"❌ Gagal buka Facebook setelah 2x coba: {_e}")
+                    ctx.close(); browser.close()
+                    return
+                print(f"⚠️ Timeout buka FB, retry...")
+                time.sleep(5)
         time.sleep(3)
         if "login" in page.url or "checkpoint" in page.url:
             print("❌ Session FB expired. Perlu re-export session.")

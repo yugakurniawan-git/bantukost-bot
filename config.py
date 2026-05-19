@@ -50,21 +50,29 @@ OFFER_KEYWORDS = [
 
 # Kata kunci yang menandakan orang MENCARI kos atau post non-listing — langsung skip
 SEEKING_KEYWORDS = [
-    # Pencari kos / kost
+    # Niat eksplisit cari kos
     "cari kos", "nyari kos", "butuh kos", "cari kost", "nyari kost", "butuh kost",
+    "mencari kos", "mencari kost", "mencari kamar", "cari kamar", "nyari kamar",
     "mau cari", "mau nyari", "lagi cari", "lagi nyari",
+    "mau ngekos", "mau nge-kos", "mau ngekost", "mau kos", "mau kost",
+    "belum dapat kos", "belum dapat kost", "susah cari kos",
+    # Pertanyaan / info
     "ada yang tau", "ada yang tahu", "ada rekomendasi", "ada recommend",
     "tolong info", "mohon info", "mohon bantu", "bantu cari",
     "recommend dong", "rekomen dong", "rekomendasiin", "saranin",
-    "ada yang punya", "ada yang jual", "ada yang sewa",
-    "help me find", "looking for",
-    "need a room", "need room", "mencari kos", "mencari kost", "mencari kamar",
-    "butuh kamar", "mau nge-kos", "mau ngekos di", "mau ngekost",
-    "belum dapat kos", "belum dapat kost", "susah cari kos", "susah cari kost",
-    # Post warning / penipuan / non-listing
-    "modus penipuan", "hati hati kawan", "hati-hati", "waspada",
-    "warninggg", "scam", "penipu", "tipu", "tertipu",
-    "jangan percaya", "lapor polisi",
+    "info kost", "info kos", "info kamar",
+    "numpang tanya", "minta info", "mau nanya",
+    # Pertanyaan dengan harga (pola umum "800rb?", "1jt?")
+    "dapet ga", "dapet gak", "ada ga", "ada gak", "ada tidak",
+    "ada yang kosong", "masih kosong",
+    # Bergabung / share kamar
+    "join kost", "join kos", "cari teman kos", "cari roommate", "share kos",
+    # Budget / anggaran
+    "bajed", "budget kos", "budget kost", "anggaran kos",
+    # Bahasa Inggris
+    "help me find", "looking for", "need a room", "need room",
+    # Ukuran preferensi
+    "butuh kamar",
 ]
 
 # ─── Instagram (Meta Graph API) ───────────────────────
