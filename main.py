@@ -41,7 +41,7 @@ def _notify_wa(message: str, key: str = "default"):
 
     wa_url = os.getenv("WA_NOTIFY_URL", "http://bantukos-wa-bot:3001/notify")
     try:
-        data = _json.dumps({"message": message}).encode()
+        data = _json.dumps({"message": message, "system": True}).encode()
         req = urllib.request.Request(wa_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=5)
         log[key] = today

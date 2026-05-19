@@ -463,7 +463,7 @@ def notify_owner_wa(poster_name, profile_url, post_url, post_text,
             f"👉 Buka profil FB di atas → kirim DM"
         )
 
-    payload = {"message": message}
+    payload = {"message": message, "system": True}
     if outreach_lead:
         payload["outreach_lead"] = outreach_lead
 
