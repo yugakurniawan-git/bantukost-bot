@@ -75,12 +75,34 @@ def extract_price(text: str) -> str:
     patterns = [
         r'[Rr][Pp]\.?\s*[\d.,]+\s*(?:juta|jt|rb|ribu|k)?(?:\s*/\s*(?:bulan|bln|bl|month))?',
         r'[\d.,]+\s*(?:juta|jt)\s*(?:/\s*(?:bulan|bln))?',
-        r'[\d.,]+\s*(?:ribu|rb|k)\s*(?:/\s*(?:bulan|bln))?',
+        # Gunakan word boundary (?![a-zA-Z]) supaya "1 kamar" tidak ikut ter-match sebagai "1 k"
+        r'[\d.,]+\s*(?:ribu|rb)\s*(?:/\s*(?:bulan|bln))?',
+        r'[\d.,]+\s*k(?![a-zA-Z])\s*(?:/\s*(?:bulan|bln))?',
     ]
     for p in patterns:
         match = re.search(p, text, re.IGNORECASE)
         if match:
-            return match.group(0).strip()
+            raw = match.group(0).strip()
+            # Validasi: harga kos minimum realistis ~100rb/bulan
+            # Parse angka dari hasil match untuk filter false positive
+            num_match = re.search(r'[\d.,]+', raw)
+            if num_match:
+                try:
+                    num_str = num_match.group(0).replace(',', '.').rstrip('.')
+                    num = float(num_str)
+                    # Konversi ke rupiah — "k" = ribu (×1000), "jt/juta" = juta (×1_000_000)
+                    if re.search(r'juta|jt', raw, re.IGNORECASE):
+                        rupiah = num * 1_000_000
+                    elif re.search(r'ribu|rb|k', raw, re.IGNORECASE):
+                        rupiah = num * 1_000
+                    else:
+                        rupiah = num
+                    # Harga < 50rb atau > 50jt tidak masuk akal untuk kos bulanan
+                    if rupiah < 50_000 or rupiah > 50_000_000:
+                        continue
+                except (ValueError, AttributeError):
+                    pass
+            return raw
     return "Hubungi pemilik"
 
 def extract_contact(text: str) -> str:
@@ -100,6 +122,10 @@ def extract_location(text: str) -> str:
         "Pecatu", "Uluwatu", "Bukit", "Bypass",
         "Tegallalang", "Sukawati", "Gianyar",
         "Mengwi", "Tabanan",
+        # Nama jalan/gang spesifik yang sering muncul
+        "Suradipa", "Tukad Badung", "Tukad Pakerisan", "Tukad Yeh Aya",
+        "Gatot Subroto", "Hayam Wuruk", "Diponegoro", "Sudirman",
+        "WR Supratman", "Raya Sesetan", "Raya Puputan",
     ]
     main_areas = [
         "Denpasar Barat", "Denpasar Selatan", "Denpasar Utara", "Denpasar Timur",
@@ -391,8 +417,8 @@ def scrape_comments_for_listings(page, post_url: str) -> list:
 
     # Scroll supaya semua konten ter-load
     for _ in range(8):
-        page.evaluate("window.scrollBy(0, 500)")
-        time.sleep(1.2)
+        page.evaluate(f"window.scrollBy(0, {random.randint(400, 650)})")
+        time.sleep(random.uniform(0.9, 1.8))
 
     results = []
     main_post_saved = False
@@ -543,18 +569,18 @@ def _discover_group_urls(page) -> list:
 
         # Scroll main content juga untuk ambil link yang muncul di feed
         for _ in range(10):
-            page.evaluate("window.scrollBy(0, 1500)")
-            time.sleep(0.8)
+            page.evaluate(f"window.scrollBy(0, {random.randint(1100, 1800)})")
+            time.sleep(random.uniform(0.6, 1.4))
 
         _process_groups(_collect_group_links(page))
 
         # ── Pass 2: Halaman /groups/joined/ ──
         try:
             page.goto("https://www.facebook.com/groups/joined/", wait_until="domcontentloaded", timeout=20000)
-            time.sleep(3)
+            time.sleep(random.uniform(2.5, 4.5))
             for _ in range(12):
-                page.evaluate("window.scrollBy(0, 1500)")
-                time.sleep(0.8)
+                page.evaluate(f"window.scrollBy(0, {random.randint(1100, 1800)})")
+                time.sleep(random.uniform(0.6, 1.4))
             _process_groups(_collect_group_links(page))
             print(f"   📄 /groups/joined/ — {len(all_groups)} grup total sejauh ini")
         except Exception as e:
@@ -563,10 +589,10 @@ def _discover_group_urls(page) -> list:
         # ── Pass 3: Halaman /groups/manage/ ──
         try:
             page.goto("https://www.facebook.com/groups/manage/", wait_until="domcontentloaded", timeout=20000)
-            time.sleep(3)
+            time.sleep(random.uniform(2.5, 4.5))
             for _ in range(6):
-                page.evaluate("window.scrollBy(0, 1500)")
-                time.sleep(0.8)
+                page.evaluate(f"window.scrollBy(0, {random.randint(1100, 1800)})")
+                time.sleep(random.uniform(0.6, 1.4))
             _process_groups(_collect_group_links(page))
             print(f"   📄 /groups/manage/ — {len(all_groups)} grup total sejauh ini")
         except Exception as e:

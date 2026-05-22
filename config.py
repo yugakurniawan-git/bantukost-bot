@@ -99,7 +99,7 @@ WATERMARK_TEXT    = "bantukos.id"
 MAX_IMAGES_PER_POST = 5  # Instagram max 10, tapi kita batasi 5
 
 # ─── Jadwal ───────────────────────────────────────────
-SCRAPE_INTERVAL_MINUTES  = 30   # scraping tiap 30 menit
+SCRAPE_INTERVAL_MINUTES  = 60   # scraping tiap 60 menit
 POST_INTERVAL_HOURS      = 6    # posting tiap 6 jam (~4 post/hari — aman dari spam IG)
 
 # ─── Batas posting per siklus ──────────────────────────
