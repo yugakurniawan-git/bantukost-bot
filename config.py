@@ -99,8 +99,19 @@ WATERMARK_TEXT    = "bantukos.id"
 MAX_IMAGES_PER_POST = 5  # Instagram max 10, tapi kita batasi 5
 
 # ─── Jadwal ───────────────────────────────────────────
-SCRAPE_INTERVAL_MINUTES  = 60   # scraping tiap 60 menit
 POST_INTERVAL_HOURS      = 6    # posting tiap 6 jam (~4 post/hari — aman dari spam IG)
+
+# ─── Anti-deteksi scraping Facebook ───────────────────
+# Interval scraping diacak dalam rentang ini (menit) — hindari pola interval tetap
+SCRAPE_INTERVAL_MIN_MINUTES = 55
+SCRAPE_INTERVAL_MAX_MINUTES = 95
+# Hanya scraping di jam aktif manusia (waktu Bali/WITA). Di luar jam ini bot diam.
+SCRAPE_ACTIVE_HOUR_START = 7    # mulai 07:00 WITA
+SCRAPE_ACTIVE_HOUR_END   = 23   # berhenti 23:00 WITA
+# Tiap run hanya scrape sebagian grup (rotasi) — semua grup ter-cover bertahap
+SCRAPE_GROUPS_PER_RUN    = 5
+# Peluang melewati satu siklus scraping (irregularitas seperti manusia)
+SCRAPE_SKIP_CHANCE       = 0.12
 
 # ─── Batas posting per siklus ──────────────────────────
 # Makin kecil = lebih aman. 2 per 6 jam = ~8 post/hari (batas aman IG ~20/hari)

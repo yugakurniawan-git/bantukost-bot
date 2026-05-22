@@ -1,20 +1,27 @@
 import time
+import random
+import datetime
 import threading
 import subprocess
 import schedule
 from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls
-from scraper import scrape_groups, extract_location as _clean_location
+from scraper import scrape_groups, get_rotation_batch, extract_location as _clean_location
 from mamikos_scraper import scrape_mamikos
 from caption import process_new_posts
 from outreach import run_outreach, init_outreach_db
 from image import process_images, create_fallback_image, create_mamikos_info_card, add_watermark
 from uploader import post_to_instagram, upload_to_cloudinary
 from config import (
-    SCRAPE_INTERVAL_MINUTES,
     POST_INTERVAL_HOURS,
     MAX_POSTS_PER_RUN,
     IMAGES_DIR,
     IMGBB_API_KEY,
+    SCRAPE_INTERVAL_MIN_MINUTES,
+    SCRAPE_INTERVAL_MAX_MINUTES,
+    SCRAPE_ACTIVE_HOUR_START,
+    SCRAPE_ACTIVE_HOUR_END,
+    SCRAPE_GROUPS_PER_RUN,
+    SCRAPE_SKIP_CHANCE,
 )
 import os
 
@@ -214,17 +221,36 @@ def _batch_upload_cloudinary(max_posts: int = 30):
         print(f"   ℹ️ Tidak ada foto baru yang berhasil di-upload")
 
 
-def run_scraping(facebook_only: bool = False):
-    """Jalankan scraping + generate caption. facebook_only=True untuk skip Mamikos."""
+def run_scraping(facebook_only: bool = False, groups: list = None):
+    """
+    Jalankan scraping + generate caption.
+    facebook_only=True untuk skip Mamikos.
+    groups: subset grup FB untuk run ini (rotasi). None = semua grup.
+    """
     print("\n" + "="*50)
     print("🔄 SIKLUS SCRAPING DIMULAI")
     print("="*50)
-    scrape_groups()
+    scrape_groups(groups=groups)
     if not facebook_only:
         scrape_mamikos()
     process_new_posts()
     get_stats()
     _batch_upload_cloudinary(max_posts=30)
+
+
+def _bali_now() -> datetime.datetime:
+    """Waktu sekarang di zona Bali (WITA, UTC+8)."""
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
+
+
+def _is_scrape_active_hours() -> bool:
+    """True kalau sekarang dalam jam aktif scraping (waktu Bali). Malam = bot diam."""
+    return SCRAPE_ACTIVE_HOUR_START <= _bali_now().hour < SCRAPE_ACTIVE_HOUR_END
+
+
+def _next_scrape_interval_minutes() -> int:
+    """Interval acak sampai siklus scraping berikutnya — hindari pola tetap."""
+    return random.randint(SCRAPE_INTERVAL_MIN_MINUTES, SCRAPE_INTERVAL_MAX_MINUTES)
 
 def _parse_raw_text_for_card(raw_text: str) -> dict:
     """Ambil fasilitas, rating, unit_type dari raw_text untuk info card."""
@@ -380,15 +406,22 @@ def run_scheduled(facebook_only: bool = True):
     src_label = "Facebook saja" if facebook_only else "Facebook + Mamikos"
     print("\n🤖 Bantu Kos Bot dimulai!")
     print(f"   Sumber scraping  : {src_label}")
-    print(f"   Scraping setiap  : {SCRAPE_INTERVAL_MINUTES} menit")
+    print(f"   Scraping setiap  : {SCRAPE_INTERVAL_MIN_MINUTES}-{SCRAPE_INTERVAL_MAX_MINUTES} menit (acak)")
+    print(f"   Jam aktif        : {SCRAPE_ACTIVE_HOUR_START}:00-{SCRAPE_ACTIVE_HOUR_END}:00 WITA")
+    print(f"   Grup per siklus  : {SCRAPE_GROUPS_PER_RUN} grup (rotasi)")
     print(f"   Posting setiap   : {POST_INTERVAL_HOURS} jam ({MAX_POSTS_PER_RUN} post terbaik/siklus)")
     print(f"   Outreach setiap  : 15 menit")
     print("   Prioritas upload : Foto > Lokasi detail > No HP > Harga > Teks")
     print("   Tekan Ctrl+C untuk berhenti\n")
     _check_token_expiry()
 
-    _scrape = lambda: run_scraping(facebook_only=facebook_only)
-    _post   = lambda: run_posting(max_posts=MAX_POSTS_PER_RUN, source="facebook" if facebook_only else None)
+    def _scrape():
+        batch = get_rotation_batch(SCRAPE_GROUPS_PER_RUN)
+        names = [g.rstrip("/").split("/")[-1] for g in batch]
+        print(f"🔁 Rotasi grup run ini ({len(batch)}): {', '.join(names)}")
+        run_scraping(facebook_only=facebook_only, groups=batch)
+
+    _post = lambda: run_posting(max_posts=MAX_POSTS_PER_RUN, source="facebook" if facebook_only else None)
 
     # Lock agar tidak ada 2 outreach berjalan bersamaan
     _outreach_lock = threading.Lock()
@@ -402,18 +435,40 @@ def run_scheduled(facebook_only: bool = True):
         else:
             print("⏭️ Outreach masih berjalan, skip siklus ini.")
 
-    schedule.every(SCRAPE_INTERVAL_MINUTES).minutes.do(_scrape)
+    # Posting/outreach/token tetap pakai schedule (jadwal tetap aman).
+    # Scraping TIDAK pakai schedule — dikelola manual agar bisa jam aktif,
+    # interval acak, dan sesekali skip (semua untuk meredam pola robot).
     schedule.every(POST_INTERVAL_HOURS).hours.do(_post)
     schedule.every(15).minutes.do(_run_outreach_safe)
     schedule.every(7).days.do(_refresh_ig_token)
 
-    # Startup: outreach paralel dengan scraping (tidak saling tunggu)
+    # Startup: outreach paralel (tidak saling tunggu)
     threading.Thread(target=_run_outreach_safe, daemon=True).start()
-    _scrape()
     _post()
+
+    next_scrape_at = time.time()  # coba scrape segera setelah startup (kalau jam aktif)
 
     while True:
         schedule.run_pending()
+
+        if time.time() >= next_scrape_at:
+            if not _is_scrape_active_hours():
+                jam = _bali_now().strftime("%H:%M")
+                print(f"🌙 {jam} WITA — di luar jam aktif "
+                      f"({SCRAPE_ACTIVE_HOUR_START}:00-{SCRAPE_ACTIVE_HOUR_END}:00), scraping ditunda.")
+                next_scrape_at = time.time() + 20 * 60   # cek lagi 20 menit
+            elif random.random() < SCRAPE_SKIP_CHANCE:
+                skip_min = _next_scrape_interval_minutes()
+                print(f"🎲 Sengaja lewati siklus scraping ini (irregularitas manusia). "
+                      f"Lanjut ~{skip_min} menit lagi.")
+                next_scrape_at = time.time() + skip_min * 60
+            else:
+                _scrape()
+                wait_min = _next_scrape_interval_minutes()
+                next_scrape_at = time.time() + wait_min * 60
+                jam = _bali_now().strftime("%H:%M")
+                print(f"⏰ Scraping berikutnya ~{wait_min} menit lagi (sekarang {jam} WITA).")
+
         time.sleep(30)
 
 if __name__ == "__main__":

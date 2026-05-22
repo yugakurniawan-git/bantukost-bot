@@ -1,11 +1,13 @@
 import re
 import os
+import json
 import time
 import random
 import hashlib
 import requests
 from playwright.sync_api import sync_playwright
-from config import FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR, WA_NOTIFY_URL
+from config import (FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR,
+                    WA_NOTIFY_URL, SCRAPE_GROUPS_PER_RUN)
 from database import is_duplicate, save_post
 from ocr import ocr_image, is_kos_flyer
 
@@ -20,8 +22,50 @@ def _wa_system_alert(message: str):
 MAX_POSTS_PER_GROUP  = 25
 MAX_POSTS_PER_CYCLE  = 60
 MAX_COMMENTS_PER_POST = 5   # max listing komentar yang diambil per post pencarian
+MAX_PASS2_POSTS      = 12   # max post yang dibuka untuk cek komentar (anti-deteksi)
 
 os.makedirs(IMAGES_DIR, exist_ok=True)
+
+# ─── Anti-deteksi browser ─────────────────────────────
+# UA Chrome 125 — cocok dengan Chromium yang dibundel Playwright 1.44 (hindari
+# "HeadlessChrome" yang langsung ketahuan bot, dan hindari mismatch versi engine).
+_REALISTIC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+
+# Init script yang menutupi sinyal otomasi sebelum halaman apa pun dimuat.
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['id-ID', 'id', 'en-US', 'en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || { runtime: {} };
+"""
+
+
+def get_rotation_batch(batch_size: int = None) -> list:
+    """
+    Ambil sebagian grup untuk satu run (rotasi). Antrian disimpan di
+    data/scrape_rotation.json supaya semua grup ter-cover bertahap dan
+    setiap run hanya menyentuh sedikit grup — jejak per run jauh lebih kecil.
+    """
+    if batch_size is None:
+        batch_size = SCRAPE_GROUPS_PER_RUN
+    path  = os.path.join("data", "scrape_rotation.json")
+    valid = list(FACEBOOK_GROUPS)
+    try:
+        queue = json.load(open(path)).get("queue", [])
+    except Exception:
+        queue = []
+    # Buang grup yang sudah tidak ada di config
+    queue = [g for g in queue if g in valid]
+    if not queue:
+        queue = valid[:]
+        random.shuffle(queue)
+    batch, rest = queue[:batch_size], queue[batch_size:]
+    try:
+        json.dump({"queue": rest}, open(path, "w"))
+    except Exception:
+        pass
+    return batch
 
 # ─── Filter Functions ──────────────────────────────────
 
@@ -633,7 +677,11 @@ def _discover_group_urls(page) -> list:
     return filtered
 
 
-def scrape_groups():
+def scrape_groups(groups=None):
+    """
+    Scrape grup Facebook.
+    groups: daftar URL grup untuk run ini (rotasi). None = semua grup di config.
+    """
     print("\n🚀 Mulai scraping Facebook Groups...")
 
     with sync_playwright() as p:
@@ -648,12 +696,22 @@ def scrape_groups():
             print(f"   🔑 Muat session dari {session_json}")
             _browser = p.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ],
             )
+            # Fingerprint realistis: UA Chrome biasa, locale & timezone Indonesia/Bali
+            # supaya akun tidak terlihat "pindah" ke server berzona UTC.
             browser = _browser.new_context(
                 storage_state=session_json,
                 viewport={"width": 1280, "height": 800},
+                user_agent=_REALISTIC_UA,
+                locale="id-ID",
+                timezone_id="Asia/Makassar",
             )
+            browser.add_init_script(_STEALTH_JS)
         elif has_local_dir:
             # Mode lokal: pakai persistent user_data_dir (bisa login manual)
             print("   🖥️ Pakai browser_session lokal")
@@ -662,7 +720,10 @@ def scrape_groups():
                 headless=is_headless,
                 args=["--disable-blink-features=AutomationControlled"],
                 viewport={"width": 1280, "height": 800},
+                locale="id-ID",
+                timezone_id="Asia/Makassar",
             )
+            browser.add_init_script(_STEALTH_JS)
         else:
             print("❌ Session Facebook tidak ditemukan!")
             print("   Jalankan dulu di lokal: python3 facebook.py")
@@ -672,8 +733,11 @@ def scrape_groups():
         page = browser.new_page()
         total_new = 0
 
-        # Auto-discover kalau FACEBOOK_GROUPS kosong
-        targets = FACEBOOK_GROUPS if FACEBOOK_GROUPS else _discover_group_urls(page)
+        # Rotasi: pakai subset grup dari caller; fallback ke semua / auto-discover
+        if groups is not None:
+            targets = list(groups)
+        else:
+            targets = FACEBOOK_GROUPS if FACEBOOK_GROUPS else _discover_group_urls(page)
         if not targets:
             print("❌ Tidak ada grup ditemukan. Isi FACEBOOK_GROUPS di config.py atau pastikan akun sudah join grup.")
             browser.close()
@@ -766,8 +830,8 @@ def scrape_groups():
                 # Facebook pakai virtual scroll: artikel hanya ada di DOM
                 # saat sedang terlihat di viewport. Jadi kita harus collect
                 # sambil scroll, bukan setelah balik ke atas.
-                print("   📜 Progressive scroll & collect (40 langkah)...")
-                time.sleep(4)
+                print("   📜 Progressive scroll & collect (28 langkah)...")
+                time.sleep(random.uniform(3, 5))
 
                 comment_patterns = ["Suka Balas Bagikan", "Like · Reply", "Balas Bagikan",
                                      "Like\nReply", "Suka\nBalas"]
@@ -778,8 +842,8 @@ def scrape_groups():
                 no_new_streak  = 0
                 MIN_SCROLLS = 12     # minimal scroll sebelum boleh early-stop
 
-                for step in range(40):
-                    time.sleep(random.uniform(1.8, 2.8))
+                for step in range(28):
+                    time.sleep(random.uniform(1.8, 3.2))
 
                     # Kumpulkan URL post selama scroll (lebih banyak = lebih banyak Pass 2)
                     new_urls = page.evaluate("""
@@ -836,7 +900,12 @@ def scrape_groups():
                         print(f"   ⏹️ Tidak ada artikel baru setelah 8 langkah, stop.")
                         break
 
-                    page.evaluate("window.scrollBy(0, 900)")
+                    page.evaluate(f"window.scrollBy(0, {random.randint(650, 1150)})")
+                    # Sesekali jeda lebih lama — meniru orang yang berhenti membaca
+                    if random.random() < 0.15:
+                        pause = random.uniform(4, 9)
+                        print(f"      💤 Jeda baca {pause:.1f}s")
+                        time.sleep(pause)
 
                 posts = list(collected.values())
 
@@ -978,9 +1047,9 @@ def scrape_groups():
 
                 # ── Pass 2: scrape komentar dari URL post (seeking post → reply) ─
                 if feed_post_urls and total_new < MAX_POSTS_PER_CYCLE:
-                    print(f"\n   💬 Pass 2: cek komentar dari {min(len(feed_post_urls), 40)} post...")
+                    print(f"\n   💬 Pass 2: cek komentar dari {min(len(feed_post_urls), MAX_PASS2_POSTS)} post...")
                     checked = 0
-                    for post_url in feed_post_urls[:40]:
+                    for post_url in feed_post_urls[:MAX_PASS2_POSTS]:
                         if group_new >= MAX_POSTS_PER_GROUP or total_new >= MAX_POSTS_PER_CYCLE:
                             break
                         try:
@@ -991,15 +1060,15 @@ def scrape_groups():
                                 # require_offering=True: komentar harus punya harga/kontak/penawaran
                                 process_entry(entry, require_offering=True)
                             checked += 1
-                            # Jeda singkat antar post
-                            time.sleep(random.uniform(2, 4))
+                            # Jeda antar post — lebih panjang & acak agar mirip manusia
+                            time.sleep(random.uniform(5, 12))
                         except Exception as e:
                             print(f"   ❌ Error komentar {post_url[-30:]}: {e}")
                         # Balik ke halaman grup setelah cek komentar
-                        if checked < len(feed_post_urls[:15]):
+                        if checked < len(feed_post_urls[:MAX_PASS2_POSTS]):
                             try:
                                 page.go_back(wait_until="domcontentloaded", timeout=15000)
-                                time.sleep(2)
+                                time.sleep(random.uniform(2, 4))
                             except Exception:
                                 pass
 

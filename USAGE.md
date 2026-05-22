@@ -312,11 +312,20 @@ P:/data/bantukos/fb_session.json
 
 | Setting | Nilai | Keterangan |
 |---------|-------|-----------|
-| `SCRAPE_INTERVAL_MINUTES` | 30 | Scraping Facebook tiap 30 menit |
+| `SCRAPE_INTERVAL_MIN_MINUTES` | 55 | Batas bawah interval scraping (acak) |
+| `SCRAPE_INTERVAL_MAX_MINUTES` | 95 | Batas atas interval scraping (acak) |
+| `SCRAPE_ACTIVE_HOUR_START` | 7 | Bot mulai scraping jam 07:00 WITA |
+| `SCRAPE_ACTIVE_HOUR_END` | 23 | Bot berhenti scraping jam 23:00 WITA |
+| `SCRAPE_GROUPS_PER_RUN` | 5 | Grup yang di-scrape per run (rotasi) |
+| `SCRAPE_SKIP_CHANCE` | 0.12 | Peluang melewati satu siklus scraping |
 | `POST_INTERVAL_HOURS` | 6 | Upload ke IG tiap 6 jam |
 | `MAX_POSTS_PER_RUN` | 2 | Max 2 post per siklus (~8 post/hari) |
 
 > IG aman sampai ~20 post/hari. Dengan setting default = ~8 post/hari, jauh dari limit.
+
+**Anti-deteksi Facebook:** scraping hanya jalan di jam aktif (07:00–23:00 WITA),
+interval diacak, dan tiap run cuma membuka 5 grup secara bergiliran (rotasi disimpan
+di `data/scrape_rotation.json`). Semua grup tetap ter-cover bertahap dalam beberapa jam.
 
 ### Cara bot memilih post terbaik
 
