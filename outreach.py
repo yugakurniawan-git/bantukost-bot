@@ -15,7 +15,10 @@ import random
 import hashlib
 import sqlite3
 import requests
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 
 from config import (
@@ -44,7 +47,33 @@ _OFFERING_SIGNALS = [
     "per bulan", "perbulan", "/bulan", "/bln",
     "hubungi kami", "wa kami", "dm kami",
     "fasilitas:", "harga:", "tarif:", "biaya sewa",
+    "kos kami", "kost kami", "unit kami", "kamar kami",
+    "hub kami", "hub. kami",
+    "siap huni", "siap ditempati", "siap dihuni",
+    "cek ig", "kepoin ig", "lihat ig", "kunjungi ig",
+    "info lebih lanjut", "tanya lebih",
+    "parkir motor", "parkir mobil",
+    "kamar mandi dalam", "kamar mandi luar", "kamar mandi pribadi",
+    "ac standing", "ac split", "free wifi", "include listrik",
 ]
+
+# Sinyal kuat yang PASTI menunjukkan ini post penawaran (cukup 1 saja)
+_STRONG_OFFERING_SIGNALS = [
+    "disewakan", "kami sewakan", "dikontrakkan",
+    "wa kami", "dm kami", "hub kami",
+    "kos kami", "kost kami", "unit kami", "kamar kami",
+    "fasilitas:", "harga:", "tarif:",
+    "siap huni", "siap dihuni",
+]
+
+# Price pattern: "700rb/bln", "1.5jt/bulan", "Rp 800k", "harga 1,5", "biaya 700"
+_PRICE_PATTERN = re.compile(
+    r'\d[\d.,]*\s*(?:rb|ribu|k|jt|juta)\s*/\s*(?:bulan|bln)|'
+    r'rp\.?\s*\d[\d.,]*\s*(?:rb|ribu|k|jt|juta)|'
+    r'(?:harga|biaya|tarif|sewa|bayar)\s+\d[\d.,]+|'   # "harga 1,5" / "biaya 700"
+    r'\d[\d.,]+\s*(?:jt|juta|rb|ribu)\b',              # "1,5jt", "700rb" (tanpa /bulan)
+    re.IGNORECASE,
+)
 
 # Topik non-kos yang sering trigger SEEKING_KEYWORDS secara tidak sengaja
 _NOISE_TOPICS = [
@@ -106,10 +135,52 @@ _MARKETING_PHRASES = [
     "kalo ada yang cari", "kalau ada yang butuh", "kalo ada yang butuh",
     "buat yang butuh kos", "bagi yang butuh kos", "untuk yang butuh kos",
     "yang lagi nyari kos", "yang sedang cari kos", "yang mau ngekos",
+    # Frasa promosi langsung
+    "yuk langsung", "langsung hubungi", "segera hubungi",
+    "jangan sampai kehabisan", "slot terbatas", "limited slot",
+    "tunggu apa lagi", "buruan sebelum", "cepet sebelum",
+    "info selengkapnya", "untuk info lebih",
+    "tersedia unit", "ada unit kosong", "ada kamar kosong",
+    "ada kost kosong", "ada kos kosong",
+    # Bahasa Jawa — "monggo" = silahkan (sering dipakai owner kos Jawa di Bali)
+    "monggo yang cari", "monggo bagi yang", "monggo untuk yang", "monggo yg cari",
+    "monggo yang butuh", "monggo yang mau", "monggo langsung",
+    "monggo mampir", "ayo mampir", "silahkan mampir",
+    # Bahasa Sunda — "mangga" = silahkan
+    "mangga yang cari", "mangga bagi yang", "mangga untuk yang",
+    # Frasa ajakan umum yang implisit nawarin
+    "yang mau kos", "yang butuh kos", "yang butuh kamar",
+    "yang cari kamar", "yang cari tempat tinggal",
+    "silahkan yang cari", "silakan yang cari",
+    "nih buat yang", "nih bagi yang", "ini buat yang",
+    "cocok buat yang", "cocok untuk yang",
 ]
+
+
+_PARTNER_SEEKING_PATTERNS = [
+    # Niat patungan / split biaya kos
+    "patungan", "kos patungan", "kost patungan",
+    # Cari teman seruangan / roommate
+    "roommate", "room mate",
+    "cari teman kos", "cari teman kost", "cari temen kos", "cari temen kost",
+    "butuh teman kos", "butuh teman kost", "mau teman kos",
+    # Share / bareng
+    "share kos", "share kost", "share kamar", "sharing kos", "sharing kost",
+    "kos bareng", "kost bareng", "ngekos bareng", "ngekost bareng",
+    "kos berdua", "kost berdua",
+    # Partner
+    "partner kos", "partner kost", "pasangan kos", "pasangan kost",
+    # Join
+    "join kos", "join kost",
+]
+
 
 def _is_seeking(text: str) -> bool:
     t = text.lower()
+    # EXCLUDE: ini bukan orang cari kos solo, tapi cari partner/teman/patungan kos.
+    # Mereka tidak mau ditawarin listing kos kita — bisa pakai kos yang sudah mereka punya.
+    if any(pat in t for pat in _PARTNER_SEEKING_PATTERNS):
+        return False
     # Harus ada minimal 1 kata kunci pencari kos
     if not any(kw in t for kw in SEEKING_KEYWORDS):
         return False
@@ -123,11 +194,16 @@ def _is_seeking(text: str) -> bool:
     # Skip kalau ada noise topic yang dominan
     if sum(1 for n in _NOISE_TOPICS if n in t) >= 2:
         return False
-    # Skip kalau ada frasa marketing (pemilik kos targeting pencari, bukan pencari sendiri)
+    # Skip kalau ada harga eksplisit (pola "700rb/bln", "Rp 1.5jt") — ini pasti penawaran
+    if _PRICE_PATTERN.search(t):
+        return False
+    # Skip kalau ada sinyal penawaran kuat (cukup 1)
+    if any(s in t for s in _STRONG_OFFERING_SIGNALS):
+        return False
+    # Skip kalau ada frasa marketing — tidak butuh sinyal offering tambahan
     if any(phrase in t for phrase in _MARKETING_PHRASES):
-        if any(s in t for s in _OFFERING_SIGNALS):
-            return False
-    # Skip kalau banyak sinyal offering (ini post penawaran, bukan pencarian)
+        return False
+    # Skip kalau banyak sinyal offering biasa (ini post penawaran, bukan pencarian)
     if sum(1 for s in _OFFERING_SIGNALS if s in t) >= 2:
         return False
     return True
@@ -163,11 +239,192 @@ def init_outreach_db():
             post_text    TEXT,
             source_type  TEXT,
             dm_draft     TEXT,
-            notified_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            notified_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            contacted_at TIMESTAMP
         )
     """)
+    # Migrasi: tambah kolom contacted_at jika belum ada (untuk DB lama)
+    try:
+        conn.execute("ALTER TABLE outreach_leads ADD COLUMN contacted_at TIMESTAMP")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # kolom sudah ada
     conn.commit()
     conn.close()
+
+
+def mark_lead_contacted(wa_number: str):
+    """Tandai semua leads dengan nomor WA ini sebagai 'sudah dihubungi'."""
+    conn = sqlite3.connect(OUTREACH_DB_PATH)
+    conn.execute(
+        "UPDATE outreach_leads SET contacted_at = CURRENT_TIMESTAMP "
+        "WHERE wa_number = ? AND contacted_at IS NULL",
+        (wa_number,)
+    )
+    conn.commit()
+    conn.close()
+    print(f"   ✅ Lead {wa_number} ditandai sudah dihubungi")
+
+
+def already_wa_contacted(wa_number: str) -> bool:
+    """Cek apakah nomor WA ini sudah pernah dikirim pesan sebelumnya."""
+    if not wa_number:
+        return False
+    conn = sqlite3.connect(OUTREACH_DB_PATH)
+    row = conn.execute(
+        "SELECT id FROM outreach_leads WHERE wa_number = ? AND contacted_at IS NOT NULL LIMIT 1",
+        (wa_number,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+_outreach_playwright_lock = threading.Lock()
+
+
+def _send_fb_dm_playwright(profile_url: str, draft: str) -> tuple[bool, str]:
+    """
+    Kirim DM Facebook ke profile_url menggunakan session FB yang ada.
+    Return (success, error_message).
+    Tidak bisa jalan bersamaan dengan outreach scan (pakai lock yang sama).
+    """
+    if not os.path.exists(FB_SESSION_PATH):
+        return False, "Session FB tidak ditemukan"
+
+    if not _outreach_playwright_lock.acquire(timeout=8):
+        return False, "Bot sedang scan grup FB, coba lagi dalam 1-2 menit"
+
+    messenger_url = _fb_messenger_link(profile_url)
+    if not messenger_url:
+        _outreach_playwright_lock.release()
+        return False, "Tidak bisa buat Messenger link dari profil ini"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage",
+                      "--disable-blink-features=AutomationControlled"],
+            )
+            ctx = browser.new_context(
+                storage_state=FB_SESSION_PATH,
+                viewport={"width": 1280, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+            )
+            page = ctx.new_page()
+            page.goto(messenger_url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
+
+            if "login" in page.url or "checkpoint" in page.url:
+                ctx.close(); browser.close()
+                return False, "Session FB expired"
+
+            # Cari input Messenger (FB pakai Lexical editor)
+            input_selectors = [
+                'div[contenteditable="true"][aria-label*="essage" i]',
+                'div[contenteditable="true"][role="textbox"]',
+                'div[contenteditable="true"][data-lexical-editor]',
+                'div[contenteditable="true"]',
+            ]
+            clicked = False
+            for sel in input_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=5000):
+                        el.click()
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not clicked:
+                ctx.close(); browser.close()
+                return False, "Tidak bisa temukan input chat Messenger"
+
+            time.sleep(0.5)
+            # Ketik perlahan agar tidak terdeteksi bot
+            for line in draft.split('\n'):
+                page.keyboard.type(line, delay=15)
+                page.keyboard.press("Shift+Enter")
+            time.sleep(1)
+            page.keyboard.press("Enter")
+            time.sleep(2)
+
+            ctx.close()
+            browser.close()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+    finally:
+        _outreach_playwright_lock.release()
+
+
+_contacted_server_started = False
+
+
+def start_contacted_server(port: int = 8001):
+    """
+    HTTP server kecil di port 8001:
+    - POST /contacted?wa=628xxx   → tandai WA lead sudah dihubungi
+    - POST /send-fb-dm            → body JSON {profile_url, draft} → kirim DM FB via Playwright
+    """
+    global _contacted_server_started
+    if _contacted_server_started:
+        return
+    _contacted_server_started = True
+
+    import json as _json
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path.startswith('/contacted'):
+                qs = parse_qs(urlparse(self.path).query)
+                wa = qs.get('wa', [''])[0]
+                if wa:
+                    mark_lead_contacted(wa)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+
+            elif self.path.startswith('/send-fb-dm'):
+                length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(length) if length else b'{}'
+                try:
+                    data = _json.loads(body)
+                    profile_url = data.get('profile_url', '')
+                    draft = data.get('draft', '')
+                    ok, err = _send_fb_dm_playwright(profile_url, draft)
+                    if ok:
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'OK')
+                    else:
+                        self.send_response(503)
+                        self.end_headers()
+                        self.wfile.write(err.encode())
+                except Exception as e:
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    def _serve():
+        try:
+            HTTPServer(('0.0.0.0', port), Handler).serve_forever()
+        except Exception as e:
+            print(f"⚠️ Bot server error: {e}")
+
+    threading.Thread(target=_serve, daemon=True).start()
+    print(f"   🔌 Bot server listening on :{port}")
 
 
 def already_notified(fb_post_id: str) -> bool:
@@ -235,40 +492,132 @@ def _extract_wa_number(text: str) -> str:
 
 # ── FB DOM helpers ────────────────────────────────────────────────────────────
 
-def _extract_poster_info(page) -> tuple[str, str]:
-    result = page.evaluate("""
-        () => {
-            // Scope ke article post utama agar tidak ambil nama dari sidebar/friend suggestions
-            const root = document.querySelector(
-                '[role="article"]:not([aria-label*="omment"]):not([aria-label*="Comment"])'
-            ) || document.querySelector('[data-pagelet*="FeedUnit"]') || document;
+def _extract_poster_info(page, expected_text: str = '') -> tuple[str, str]:
+    """
+    Ekstrak nama & profile URL pembuat post.
+    expected_text: snippet teks post yang sudah kita ambil sebelumnya.
+    Dipakai untuk **menyaring article yang benar** — penting karena halaman
+    FB post sering punya beberapa <article> (sidebar, suggested, related)
+    dan kalau salah pilih, nama yang ter-extract jadi milik post lain.
+    """
+    # Ambil snippet pendek untuk dipakai sebagai "fingerprint" article yang benar.
+    # 50 karakter pertama yang non-whitespace cukup unik untuk membedakan.
+    snippet = ''
+    if expected_text:
+        snippet = ' '.join(expected_text.split())[:50].lower()
 
-            const selectors = [
-                '[data-ad-rendering-role="profile_name"] a',
-                'h2 a[href*="facebook.com"]', 'h3 a[href*="facebook.com"]',
-                'strong a[href*="facebook.com"]',
-                'a[role="link"][href*="/user/"]', 'a[role="link"][href*="profile.php"]',
-            ];
-            for (const sel of selectors) {
-                const el = root.querySelector(sel);
-                if (el) {
-                    const name = (el.innerText || el.textContent || '').trim();
-                    let href = el.href || '';
-                    try {
-                        const u = new URL(href);
-                        if (u.searchParams.has('id')) {
-                            href = u.origin + u.pathname + '?id=' + u.searchParams.get('id');
-                        } else {
-                            href = u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
-                        }
-                    } catch(e) {}
-                    // Pastikan nama bukan nama grup (biasanya > 30 karakter atau all caps)
-                    if (name && name.length < 60 && href.includes('facebook.com')) return [name, href];
+    result = page.evaluate("""
+        (snippet) => {
+            function cleanHref(href) {
+                try {
+                    const u = new URL(href);
+                    if (u.searchParams.has('id'))
+                        return u.origin + u.pathname + '?id=' + u.searchParams.get('id');
+                    return u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
+                } catch(e) { return href; }
+            }
+            function isGroupLink(href) {
+                return /\\/groups\\/|groups\\.facebook/.test(href);
+            }
+            function findProfileLinkInEl(el) {
+                const a = el.querySelector('a[href*="facebook.com/"]:not([href*="/groups/"])');
+                return a ? cleanHref(a.href || '') : '';
+            }
+            function articleContainsSnippet(art) {
+                if (!snippet) return false;
+                const txt = (art.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
+                return txt.includes(snippet);
+            }
+            function tryParseName(art) {
+                const label = art.getAttribute('aria-label') || '';
+                if (/comment|komentar/i.test(label)) return null;
+                if (label.length < 2 || label.length > 120) return null;
+                const stripped = label
+                    .replace(/^Post(?:ingan)?\\s+(?:oleh|by|dari|of)\\s+/i, '')
+                    .replace(/^Foto\\s+(?:oleh|by)\\s+/i, '');
+                const m = stripped.match(/^(.{2,55}?)(?:\\s+(?:di\\s|in\\s|posted|memposting|berbagi|shared)|$)/i);
+                if (!m) return null;
+                const name = m[1].trim();
+                const noisy = /\\b(?:group|grup|kost?|sewa|kontrakan|facebook|info)\\b/i.test(name);
+                if (noisy || name.length < 2 || name.length > 55) return null;
+                return [name, findProfileLinkInEl(art)];
+            }
+
+            const articles = [...document.querySelectorAll('[role="article"]')];
+
+            // Strategy 1a (PALING ANDAL): article yang TEKS-nya mengandung snippet post target.
+            // Ini menjamin article yang dipilih = article yang sedang kita target,
+            // bukan post lain di sidebar/suggested.
+            if (snippet) {
+                for (const art of articles) {
+                    if (!articleContainsSnippet(art)) continue;
+                    const parsed = tryParseName(art);
+                    if (parsed) return parsed;
                 }
             }
+
+            // Strategy 1b: aria-label generik (fallback kalau snippet tidak match)
+            for (const art of articles) {
+                const parsed = tryParseName(art);
+                if (parsed) return parsed;
+            }
+
+            // Strategy 2: scan semua link di article — JavaScript filter
+            // Prioritaskan article yang containing snippet kalau ada.
+            let root = null;
+            if (snippet) {
+                root = articles.find(a => articleContainsSnippet(a) &&
+                    !/omment/i.test(a.getAttribute('aria-label') || ''));
+            }
+            if (!root) {
+                root = document.querySelector(
+                    '[role="article"]:not([aria-label*="omment"]):not([aria-label*="Comment"])'
+                ) || document.querySelector('[data-pagelet*="FeedUnit"]') || document;
+            }
+
+            // Coba dulu selector spesifik yang reliable
+            const directSels = [
+                '[data-ad-rendering-role="profile_name"] a',
+                'a[role="link"][href*="profile.php"]',
+            ];
+            for (const sel of directSels) {
+                const el = root.querySelector(sel);
+                if (!el) continue;
+                const name = (el.innerText || el.textContent || '').trim();
+                const href = cleanHref(el.href || '');
+                if (name && name.length >= 2 && name.length < 55 && href.includes('facebook.com'))
+                    return [name, href];
+            }
+
+            // Fallback: scan semua link, filter via JavaScript (bukan CSS :not yang bisa miss)
+            const skipPattern = /\/groups\/|\/posts\/|\/photos\/|\/videos\/|\/events\/|\/hashtag\/|\/watch|\/reel|\/marketplace|login|checkpoint|recover|story_fbid/i;
+            const noisyName = /\\b(?:kos|kost|sewa|kontrakan|info|grup|group|like|comment|share|see more|more|lihat|semua)\\b/i;
+            const allLinks = [...root.querySelectorAll('a[href]')];
+            for (const a of allLinks) {
+                const href = a.href || '';
+                if (!href.includes('facebook.com')) continue;
+                if (skipPattern.test(href)) continue;
+                if (/^https?:\\/\\/(?:www\\.)?facebook\\.com\\/?(?:[#?].*)?$/.test(href)) continue;
+                const name = (a.innerText || a.textContent || '').trim();
+                if (name.length < 2 || name.length > 50) continue;
+                if (noisyName.test(name)) continue;
+                const cleaned = cleanHref(href);
+                if (cleaned && cleaned !== 'https://www.facebook.com') return [name, cleaned];
+            }
+
+            // Strategy 3: page title fallback
+            const title = document.title || '';
+            const titleMatch = title.match(/^([^|\\-–]{2,50})(?:\\s*[|\\-–])/);
+            if (titleMatch) {
+                const n = titleMatch[1].trim();
+                const bl = ['facebook', 'group', 'grup', 'feed', 'home', 'beranda',
+                            'info kos', 'info kost', 'sewa', 'kontrakan'];
+                if (n && !bl.some(b => n.toLowerCase().includes(b))) return [n, ''];
+            }
+
             return ['', ''];
         }
-    """)
+    """, snippet)
     return (result[0] or '', result[1] or '') if result else ('', '')
 
 
@@ -420,7 +769,7 @@ def _get_listings_for_area(location: str, limit: int = 3, max_price: int = 0) ->
         conn = sqlite3.connect(DB_PATH)
         area_kw = location.lower().split()[0] if location else ''
         rows = conn.execute("""
-            SELECT location, price, COALESCE(contact,'') as contact,
+            SELECT id, location, price, COALESCE(contact,'') as contact,
                    COALESCE(substr(raw_text,1,600),'') as raw_text
             FROM posts
             WHERE status IN ('captioned', 'posted')
@@ -434,7 +783,7 @@ def _get_listings_for_area(location: str, limit: int = 3, max_price: int = 0) ->
         conn.close()
 
         results, seen_locs = [], set()
-        for loc_raw, price_raw, contact_raw, raw_text in rows:
+        for post_id, loc_raw, price_raw, contact_raw, raw_text in rows:
             if not loc_raw: continue
             clean_p = _clean_price(price_raw)
             if not clean_p: continue
@@ -447,7 +796,7 @@ def _get_listings_for_area(location: str, limit: int = 3, max_price: int = 0) ->
             loc_key = loc_display.lower().strip()
             if loc_key in seen_locs: continue
             seen_locs.add(loc_key)
-            results.append({'location': loc_display, 'price': clean_p})
+            results.append({'id': post_id, 'location': loc_display, 'price': clean_p})
             if len(results) >= limit: break
         return results
     except Exception as e:
@@ -537,63 +886,140 @@ def _short_lead_id(wa_number: str, post_url: str) -> str:
     return hashlib.md5(f"{wa_number}{post_url}".encode()).hexdigest()[:6]
 
 
+def _fb_dm_id(profile_url: str, post_url: str) -> str:
+    return 'fb' + hashlib.md5(f"{profile_url}{post_url}".encode()).hexdigest()[:5]
+
+
+def _fb_messenger_link(profile_url: str) -> str:
+    """Buat direct Messenger link dari profil FB — tinggal tap untuk buka chat."""
+    if not profile_url:
+        return ''
+    try:
+        u = profile_url.rstrip('/')
+        # profile.php?id=123456 → facebook.com/messages/t/123456
+        uid_match = re.search(r'[?&]id=(\d+)', u)
+        if uid_match:
+            return f"https://www.facebook.com/messages/t/{uid_match.group(1)}"
+        # /people/Name/UID/123456 atau /user/123456
+        num_match = re.search(r'/(?:user|people/[^/]+/id)/(\d+)', u)
+        if num_match:
+            return f"https://www.facebook.com/messages/t/{num_match.group(1)}"
+        # facebook.com/username → m.me/username
+        path = u.split('facebook.com/')[-1].strip('/')
+        if path and '/' not in path and '?' not in path:
+            return f"https://m.me/{path}"
+    except Exception:
+        pass
+    return ''
+
+
+def _kos_codes_line(location: str, post_text: str = '') -> str:
+    """Baris ringkas kode kos yang ditawarkan di draft, untuk referensi owner."""
+    max_price = _extract_budget_from_text(post_text) if post_text else 0
+    listings = _get_listings_for_area(location, limit=3, max_price=max_price)
+    if not listings and max_price:
+        listings = _get_listings_for_area(location, limit=3)
+    if not listings:
+        return ''
+    codes = ', '.join(f"BK-{l['id']} ({l['location']} {l['price']})" for l in listings)
+    return f"🏠 *Kos ditawarkan*: {codes}"
+
+
 def notify_owner_wa(poster_name, profile_url, post_url, post_text,
                     dm_draft, location, wa_number='', source_type='post') -> bool:
     short_post = post_text[:180].replace('\n', ' ')
+    prev_contact = wa_number and already_wa_contacted(wa_number)
+    prev_tag = "\n⚠️ _Nomor ini sudah pernah dikirim WA sebelumnya_" if prev_contact else ""
+
+    kos_line = _kos_codes_line(location, post_text)
+    kos_section = f"\n{kos_line}" if kos_line else ""
 
     outreach_lead = None
+    fb_dm_lead = None   # inisialisasi eksplisit — hindari bug dir() check
     if wa_number:
         lead_id = _short_lead_id(wa_number, post_url)
         outreach_lead = {"id": lead_id, "wa_number": wa_number, "draft": dm_draft}
         wa_link = f"https://wa.me/{wa_number}"
         message = (
-            f"🎯 *Lead SupportKos — Via WA Langsung!*\n\n"
+            f"🎯 *Lead SupportKos — Via WA Langsung!*{prev_tag}\n\n"
             f"👤 Nama  : {poster_name or '?'}\n"
             f"📍 Lokasi: {location}\n"
-            f"📱 WA    : {wa_link}\n\n"
+            f"📱 WA    : {wa_link}\n"
+            f"{kos_section}\n"
             f"📝 *Post asli:*\n_{short_post}_\n\n"
             f"🔗 Lihat post: {post_url}\n\n"
-            f"✍️ *Draft pesan WA:*\n---\n{dm_draft}\n---\n\n"
             f"👉 Balas *lead kirim {lead_id}* untuk langsung kirim\n"
-            f"   atau klik {wa_link} → paste draft manual"
+            f"   atau klik {wa_link} → paste draft di bawah"
         )
     elif source_type == 'comment':
+        messenger_link = _fb_messenger_link(profile_url)
+        dm_id = _fb_dm_id(profile_url, post_url)
+        fb_dm_lead = {"id": dm_id, "profile_url": profile_url, "draft": dm_draft} if profile_url else None
+        dm_action = (
+            f"👉 Balas *dm kirim {dm_id}* untuk auto DM via bot\n"
+            f"   atau tap manual: {messenger_link}"
+            if messenger_link else
+            f"🔗 Profil FB: {profile_url or '(tidak terdeteksi)'}"
+        )
         message = (
             f"💬 *Lead SupportKos — Komentar FB*\n\n"
             f"👤 Nama  : {poster_name or '?'}\n"
             f"📍 Lokasi: {location}\n"
-            f"🔗 Profil FB: {profile_url or '(tidak terdeteksi)'}\n\n"
+            f"{kos_section}\n"
             f"💬 *Komentar:*\n_{short_post}_\n\n"
             f"🔗 Lihat komentar: {post_url}\n\n"
-            f"✍️ *Draft DM FB:*\n---\n{dm_draft}\n---\n\n"
-            f"👉 Buka profil FB di atas → kirim DM"
+            f"{dm_action}"
         )
     else:
+        messenger_link = _fb_messenger_link(profile_url)
+        dm_id = _fb_dm_id(profile_url, post_url)
+        fb_dm_lead = {"id": dm_id, "profile_url": profile_url, "draft": dm_draft} if profile_url else None
+        dm_action = (
+            f"👉 Balas *dm kirim {dm_id}* untuk auto DM via bot\n"
+            f"   atau tap manual: {messenger_link}"
+            if messenger_link else
+            f"🔗 Profil FB: {profile_url or '(tidak terdeteksi)'}"
+        )
         message = (
             f"🎯 *Lead SupportKos — FB DM*\n\n"
             f"👤 Nama  : {poster_name or '?'}\n"
             f"📍 Lokasi: {location}\n"
-            f"🔗 Profil FB: {profile_url or '(tidak terdeteksi)'}\n\n"
+            f"{kos_section}\n"
             f"📝 *Post asli:*\n_{short_post}_\n\n"
             f"🔗 Lihat post: {post_url}\n\n"
-            f"✍️ *Draft DM FB:*\n---\n{dm_draft}\n---\n\n"
-            f"👉 Buka profil FB di atas → kirim DM"
+            f"{dm_action}"
         )
 
     payload = {"message": message}
     if outreach_lead:
         payload["outreach_lead"] = outreach_lead
+    if fb_dm_lead:
+        payload["fb_dm_lead"] = fb_dm_lead
+
+    # Pesan draft terpisah — mudah diselect dan dicopy
+    draft_label = "📋 *Draft WA (copy & kirim):*" if wa_number else "📋 *Draft DM FB (copy & kirim):*"
+    draft_message = f"{draft_label}\n\n{dm_draft}"
 
     try:
         resp = requests.post(WA_NOTIFY_URL, json=payload, timeout=10)
-        if resp.status_code == 200:
-            print(f"   ✅ Notif terkirim [{source_type}] {poster_name} → {'WA ' + wa_number if wa_number else 'FB DM'}")
-            return True
-        print(f"   ⚠️ WA notify gagal: {resp.status_code} {resp.text[:100]}")
-        return False
+        if resp.status_code != 200:
+            print(f"   ⚠️ WA notify gagal: {resp.status_code} {resp.text[:100]}")
+            return False
+        print(f"   ✅ Notif terkirim [{source_type}] {poster_name} → {'WA ' + wa_number if wa_number else 'FB DM'}")
     except Exception as e:
         print(f"   ⚠️ WA notify error: {e}")
         return False
+
+    # Kirim draft sebagai pesan kedua — selalu, terlepas dari apapun
+    try:
+        time.sleep(1)
+        r2 = requests.post(WA_NOTIFY_URL, json={"message": draft_message}, timeout=10)
+        if r2.status_code != 200:
+            print(f"   ⚠️ Draft message gagal: {r2.status_code}")
+    except Exception as e:
+        print(f"   ⚠️ Draft message error: {e}")
+
+    return True
 
 
 # ── Scan logic ────────────────────────────────────────────────────────────────
@@ -613,7 +1039,7 @@ def _handle_lead(page, post_url, text, poster_name, profile_url, lead_key, sourc
     return ok
 
 
-def _process_post_main(page, post_url: str) -> int:
+def _process_post_main(page, post_url: str, prefetched_name: str = '', prefetched_profile: str = '') -> int:
     post_key = f"outreach_post_{_post_id_from_url(post_url)}"
     if already_notified(post_key):
         return 0
@@ -623,7 +1049,11 @@ def _process_post_main(page, post_url: str) -> int:
         post_text = _get_post_text(page)
         if not post_text or not _is_seeking(post_text):
             return 0
-        poster_name, profile_url = _extract_poster_info(page)
+        # Gunakan nama dari feed (prefetched) jika tersedia; fallback ke extract dari halaman post
+        if prefetched_name:
+            poster_name, profile_url = prefetched_name, prefetched_profile
+        else:
+            poster_name, profile_url = _extract_poster_info(page, expected_text=post_text)
         return 1 if _handle_lead(page, post_url, post_text, poster_name,
                                  profile_url, post_key, 'post') else 0
     except Exception as e:
@@ -695,39 +1125,95 @@ def _scan_group_outreach(page, group_url: str) -> int:
         except Exception:
             pass
 
-    # Progressive scroll sambil kumpulkan URL post
-    post_links_set = set()
+    # Progressive scroll sambil kumpulkan URL post + info poster dari feed
+    post_info: dict[str, dict] = {}  # url → {name, profile_url}
     for step in range(20):
         time.sleep(random.uniform(1.5, 2.5))
-        new_urls = page.evaluate("""
+        new_items = page.evaluate("""
             () => {
-                const links = [];
-                document.querySelectorAll('a[href]').forEach(a => {
-                    const href = a.href || '';
-                    const isPost = /\/posts\/\d+|story_fbid=\d+|\/share\/p\//.test(href);
-                    if (href.includes('facebook.com') && isPost)
-                        links.push(href.split('?')[0]);
+                function cleanHref(href) {
+                    try {
+                        const u = new URL(href);
+                        if (u.searchParams.has('id'))
+                            return u.origin + u.pathname + '?id=' + u.searchParams.get('id');
+                        return u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
+                    } catch(e) { return href; }
+                }
+                const skipPat = /\\/groups\\/|\\/posts\\/|\\/photos\\/|\\/events\\/|\\/hashtag\\/|\\/watch|\\/reel|login|checkpoint/i;
+                const noisyName = /\\b(?:kos|kost|sewa|kontrakan|info|grup|group)\\b/i;
+                const items = [];
+                document.querySelectorAll('[role="article"]').forEach(art => {
+                    // Cari URL post dari artikel ini
+                    let postUrl = '';
+                    art.querySelectorAll('a[href]').forEach(a => {
+                        if (postUrl) return;
+                        const h = (a.href || '').split('?')[0];
+                        if (/\\/posts\\/\\d+|story_fbid=\\d+|\\/share\\/p\\//.test(h) && h.includes('facebook.com'))
+                            postUrl = h;
+                    });
+                    if (!postUrl) return;
+
+                    // Coba ambil nama dari aria-label artikel
+                    let name = '', profileUrl = '';
+                    const label = art.getAttribute('aria-label') || '';
+                    if (label && !/comment|komentar/i.test(label) && label.length >= 2 && label.length <= 120) {
+                        const stripped = label
+                            .replace(/^Post(?:ingan)?\\s+(?:oleh|by|dari|of)\\s+/i, '')
+                            .replace(/^Foto\\s+(?:oleh|by)\\s+/i, '');
+                        const m = stripped.match(/^(.{2,55}?)(?:\\s+(?:di\\s|in\\s|posted|memposting|berbagi|shared)|$)/i);
+                        if (m) {
+                            const candidate = m[1].trim();
+                            if (!/\\b(?:group|grup|kost?|sewa|kontrakan|facebook|info)\\b/i.test(candidate)
+                                && candidate.length >= 2 && candidate.length <= 55) {
+                                name = candidate;
+                            }
+                        }
+                    }
+
+                    // Ambil profil link dari artikel
+                    for (const a of art.querySelectorAll('a[href]')) {
+                        const h = a.href || '';
+                        if (!h.includes('facebook.com')) continue;
+                        if (skipPat.test(h)) continue;
+                        if (/^https?:\\/\\/(?:www\\.)?facebook\\.com\\/?(?:[#?].*)?$/.test(h)) continue;
+                        const t = (a.innerText || a.textContent || '').trim();
+                        if (!name && t.length >= 2 && t.length <= 50 && !noisyName.test(t)) name = t;
+                        if (!profileUrl) profileUrl = cleanHref(h);
+                        if (name && profileUrl) break;
+                    }
+
+                    items.push({ url: postUrl, name, profileUrl });
                 });
-                return links;
+                return items;
             }
         """)
-        before = len(post_links_set)
-        post_links_set.update(new_urls)
-        if step >= 10 and len(post_links_set) == before:
+        before = len(post_info)
+        for item in (new_items or []):
+            url = item.get('url', '')
+            if not url: continue
+            if url not in post_info:
+                post_info[url] = {'name': item.get('name', ''), 'profile_url': item.get('profileUrl', '')}
+            elif not post_info[url]['name'] and item.get('name'):
+                post_info[url]['name'] = item['name']
+                post_info[url]['profile_url'] = item.get('profileUrl', '')
+        if step >= 10 and len(post_info) == before:
             break
         page.evaluate("window.scrollBy(0, 2000)")
 
-    post_links = list(post_links_set)[:30]
-    print(f"   🔎 {len(post_links)} post ditemukan")
+    post_urls = list(post_info.keys())[:30]
+    print(f"   🔎 {len(post_urls)} post ditemukan")
     total = 0
 
     print("   📌 Pass 1: cek post utama...")
-    for post_url in post_links:
-        total += _process_post_main(page, post_url)
+    for post_url in post_urls:
+        info = post_info.get(post_url, {})
+        total += _process_post_main(page, post_url,
+                                    prefetched_name=info.get('name', ''),
+                                    prefetched_profile=info.get('profile_url', ''))
         time.sleep(random.randint(2, 5))
 
     print("   💬 Pass 2: scan komentar...")
-    for post_url in post_links:
+    for post_url in post_urls:
         total += _process_post_comments(page, post_url)
         time.sleep(random.randint(2, 5))
 
@@ -740,6 +1226,7 @@ def run_outreach():
         return
 
     init_outreach_db()
+    start_contacted_server()
     print(f"\n🎯 Outreach Scan — {count_leads_today()} leads hari ini")
 
     with sync_playwright() as p:
