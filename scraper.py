@@ -6,8 +6,8 @@ import random
 import hashlib
 import requests
 from playwright.sync_api import sync_playwright
-from config import (FACEBOOK_GROUPS, KEYWORDS, SEEKING_KEYWORDS, IMAGES_DIR,
-                    WA_NOTIFY_URL, SCRAPE_GROUPS_PER_RUN)
+from config import (FACEBOOK_GROUPS, FACEBOOK_GROUPS_PUBLIC, KEYWORDS, SEEKING_KEYWORDS,
+                    IMAGES_DIR, WA_NOTIFY_URL, SCRAPE_GROUPS_PER_RUN)
 from database import is_duplicate, save_post
 from ocr import ocr_image, is_kos_flyer
 
@@ -685,50 +685,25 @@ def scrape_groups(groups=None):
     print("\n🚀 Mulai scraping Facebook Groups...")
 
     with sync_playwright() as p:
-        import sys as _sys
-        session_json  = "data/fb_session.json"
-        has_local_dir = os.path.exists("data/browser_session/Default")
-        # Headless kalau tidak ada display (server/Docker) — macOS tidak butuh DISPLAY
-        is_headless   = not bool(os.environ.get("DISPLAY")) and _sys.platform != "darwin"
-
-        if os.path.exists(session_json):
-            # Mode server: pakai storage_state JSON (2KB, hasil export dari lokal)
-            print(f"   🔑 Muat session dari {session_json}")
-            _browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-            )
-            # Fingerprint realistis: UA Chrome biasa, locale & timezone Indonesia/Bali
-            # supaya akun tidak terlihat "pindah" ke server berzona UTC.
-            browser = _browser.new_context(
-                storage_state=session_json,
-                viewport={"width": 1280, "height": 800},
-                user_agent=_REALISTIC_UA,
-                locale="id-ID",
-                timezone_id="Asia/Makassar",
-            )
-            browser.add_init_script(_STEALTH_JS)
-        elif has_local_dir:
-            # Mode lokal: pakai persistent user_data_dir (bisa login manual)
-            print("   🖥️ Pakai browser_session lokal")
-            browser = p.chromium.launch_persistent_context(
-                user_data_dir="data/browser_session",
-                headless=is_headless,
-                args=["--disable-blink-features=AutomationControlled"],
-                viewport={"width": 1280, "height": 800},
-                locale="id-ID",
-                timezone_id="Asia/Makassar",
-            )
-            browser.add_init_script(_STEALTH_JS)
-        else:
-            print("❌ Session Facebook tidak ditemukan!")
-            print("   Jalankan dulu di lokal: python3 facebook.py")
-            print("   Lalu upload: scp data/fb_session.json root@server:/data/bantukos/fb_session.json")
-            return
+        # ── Opsi 3: Anonymous scraping untuk grup PUBLIC ──
+        # Tidak butuh session FB — langsung buka browser tanpa login.
+        # Grup private yang redirect ke login akan di-skip per-grup, bukan exit total.
+        print("   🌐 Mode anonymous — scraping public groups tanpa session FB")
+        _browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        browser = _browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=_REALISTIC_UA,
+            locale="id-ID",
+            timezone_id="Asia/Makassar",
+        )
+        browser.add_init_script(_STEALTH_JS)
 
         page = browser.new_page()
         total_new = 0
@@ -756,31 +731,15 @@ def scrape_groups(groups=None):
                 page.goto(group_url.rstrip("/"), wait_until="domcontentloaded", timeout=30000)
                 time.sleep(random.uniform(3, 5))
 
-                # Handle login
+                # Handle login redirect — grup private atau FB minta login
                 if "login" in page.url or "checkpoint" in page.url:
-                    if is_headless:
-                        msg = (
-                            "⚠️ *ALERT: Session Facebook Expired!*\n\n"
-                            "Bot tidak bisa scraping — session FB perlu di-refresh.\n\n"
-                            "Cara fix:\n"
-                            "1. Di lokal: `python3 facebook.py --export-session`\n"
-                            "2. Upload: `scp data/fb_session.json root@202.155.18.49:/tmp/fb_session.json`\n"
-                            "3. Kabarin aku untuk copy ke container"
-                        )
-                        print("❌ Session Facebook expired atau ditolak (IP server berbeda).")
-                        _wa_system_alert(msg)
-                        return
-                    print("⚠️ Facebook minta login manual...")
-                    print("   Login di browser yang terbuka, lalu tekan Enter.")
-                    input()
-                    page.goto(group_url.rstrip("/"), wait_until="domcontentloaded", timeout=30000)
-                    time.sleep(4)
-                    # Simpan session ke JSON kecil — untuk deploy berikutnya
-                    try:
-                        browser.storage_state(path="data/fb_session.json")
-                        print("   💾 Session disimpan ke data/fb_session.json")
-                    except Exception:
-                        pass
+                    is_private = group_url in FACEBOOK_GROUPS_PUBLIC
+                    if is_private:
+                        # Harusnya public tapi FB tetap redirect → kemungkinan grup berubah jadi private
+                        print(f"   ⚠️ Redirect ke login — grup ini mungkin berubah jadi private: {group_name}")
+                    else:
+                        print(f"   🔒 Grup private membutuhkan login, skip: {group_name}")
+                    continue
 
                 if "groups" not in page.url:
                     print("   ⚠️ Tidak bisa masuk grup, skip.")

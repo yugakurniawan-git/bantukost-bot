@@ -9,16 +9,14 @@ OPENAI_MODEL   = "gpt-4o-mini"  # murah & cukup untuk caption
 
 # ─── Facebook ─────────────────────────────────────────
 # Daftar URL grup Facebook yang mau di-monitor
-FACEBOOK_GROUPS = [
-    # ── Sudah lama di config ──────────────────────────────
+# Grup PUBLIC — bisa diakses tanpa login FB (diverifikasi manual).
+# Scraper akan coba tanpa session dulu. Tidak perlu refresh session untuk grup ini.
+FACEBOOK_GROUPS_PUBLIC = [
     "https://www.facebook.com/groups/406723907186704/",   # INFO KOS - BALI
     "https://www.facebook.com/groups/861393030619800/",   # Kost Denpasar
     "https://www.facebook.com/groups/1063633451232483/",  # INFO KOST DENPASAR Sesetan, Sidakarya, Panjer
     "https://www.facebook.com/groups/1380894039527782/",  # INFO KOS SESETAN / Denpasar
-    "https://www.facebook.com/groups/1474790899487041/",  # Kos dan Kontrakan Bali
-    "https://www.facebook.com/groups/infokossesetan/",    # Info kos-kosan di Bali Denpasar
     "https://www.facebook.com/groups/2910563342557517/",  # Info Kost Denpasar Dan Sekitarnya
-    # ── Ditambahkan dari daftar grup owner ───────────────
     "https://www.facebook.com/groups/168852986863089/",   # Info Kost dan Sewa Property Bali Denpasar
     "https://www.facebook.com/groups/291302024580274/",   # Info Kost & Kontrakan Denpasar & Sekitar
     "https://www.facebook.com/groups/1232953460580607/",  # kost/kontrakan pemogan denpasar selatan
@@ -28,6 +26,15 @@ FACEBOOK_GROUPS = [
     "https://www.facebook.com/groups/313255506400361/",   # info kost denpasar
     "https://www.facebook.com/groups/info-kos-sewa-kontrakan-rumah-apartment-di-jimbaran-nusadua-bali-1768380166810959/",  # Jimbaran & Nusadua
 ]
+
+# Grup PRIVATE — butuh login FB. Hanya di-scrape kalau session tersedia.
+FACEBOOK_GROUPS_PRIVATE = [
+    "https://www.facebook.com/groups/1474790899487041/",  # Kos dan Kontrakan Bali
+    "https://www.facebook.com/groups/infokossesetan/",    # Info kos-kosan di Bali Denpasar
+]
+
+# Alias gabungan — dipakai oleh rotasi dan logika lama
+FACEBOOK_GROUPS = FACEBOOK_GROUPS_PUBLIC + FACEBOOK_GROUPS_PRIVATE
 
 # Kata kunci WAJIB ada — postingan harus mengandung salah satu ini
 KEYWORDS = [
