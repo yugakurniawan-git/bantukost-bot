@@ -66,6 +66,27 @@ OFFER_KEYWORDS = [
     "ac", "fasilitas", "furnished", "include", "termasuk"
 ]
 
+# Kata kunci yang menandakan post BUKAN tentang kos sama sekali — langsung reject
+# Lebih keras dari SEEKING_KEYWORDS: apapun konteksnya, post ini tidak relevan.
+REJECTION_KEYWORDS = [
+    # Jasa tubuh / terapi
+    "open tatto", "open tattoo", "tatto studio", "tattoo studio",
+    "jasa tatto", "jasa tattoo",
+    "pijat ", "urut bayi", "urut ibu hamil", "kerok",
+    "kerokan", "bekam",
+    # Jasa angkutan / logistik
+    "jasa angkut", "jasa pindahan", "carteran pick",
+    # Supranatural / pengobatan alternatif
+    "ilmu hitam", "santet", "bebainan",
+    "cetik", "pengeliakan", "teluh",
+    "pengobatan alternatif",
+    # Jual barang lepas (bukan properti)
+    "jual kulkas", "jual tv ", "jual kipas", "jual lemari", "jual dispenser",
+    "jual gerobak", "jual rombong", "jual mesin",
+    # Non-properti lain
+    "olshop", "pre order", "jasa laundry",
+]
+
 # Kata kunci yang menandakan orang MENCARI kos atau post non-listing — langsung skip
 SEEKING_KEYWORDS = [
     # Niat eksplisit cari kos

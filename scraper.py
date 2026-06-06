@@ -7,7 +7,7 @@ import hashlib
 import requests
 from playwright.sync_api import sync_playwright
 from config import (FACEBOOK_GROUPS, FACEBOOK_GROUPS_PUBLIC, KEYWORDS, SEEKING_KEYWORDS,
-                    IMAGES_DIR, WA_NOTIFY_URL, SCRAPE_GROUPS_PER_RUN)
+                    REJECTION_KEYWORDS, IMAGES_DIR, WA_NOTIFY_URL, SCRAPE_GROUPS_PER_RUN)
 from database import is_duplicate, save_post
 from ocr import ocr_image, is_kos_flyer
 
@@ -112,6 +112,47 @@ def is_seeking_post(text: str) -> bool:
     """
     t = text.lower()
     return any(kw in t for kw in SEEKING_KEYWORDS)
+
+def is_rejected_post(text: str) -> bool:
+    """
+    Deteksi post yang BUKAN tentang kos sama sekali (tatto, pijat, jual barang, dll).
+    Reject sebelum masuk DB — tidak peduli konteks lain.
+    """
+    t = text.lower()
+    return any(kw in t for kw in REJECTION_KEYWORDS)
+
+# ─── Regex untuk kata kunci spesifik kos (minimal 1 wajib ada untuk Pass 1) ──
+_KOS_SPECIFIC_RE = re.compile(
+    r'\b(?:kos|kost|kontrakan|kamar\s+kos|kosan|ngekos|kos-kosan|'
+    r'disewakan|sewa\s+kamar|sewa\s+kos|sewa\s+kontrakan|'
+    r'tersedia|available|siap\s+huni|kamar\s+kosong|unit\s+kosong)\b',
+    re.IGNORECASE
+)
+
+def has_kos_specific_word(text: str) -> bool:
+    """
+    Cek apakah ada kata yang SPESIFIK merujuk kos/properti sewa.
+    'sewa' atau 'kamar' saja tidak cukup — bisa konteks lain (sewa pick-up, kamar mandi, dll).
+    """
+    return bool(_KOS_SPECIFIC_RE.search(text))
+
+# ─── Bersihkan noise UI Facebook dari teks ────────────────────────────────────
+_FB_UI_RE = re.compile(
+    r'\b(?:Suka|Balas|Bagikan|Like|Reply|Share|Komentar|Comment)\b'  # tombol aksi
+    r'|\bLihat(?:\s+selengkapnya|\s+terjemahan)?\b'                  # "Lihat selengkapnya"
+    r'|\.\.\.\s*Lihat\b.*'                                           # "... Lihat selengkapnya"
+    r'|\b\d+\s*(?:detik|menit|jam|hari|minggu|bulan|tahun)\b'       # timestamp relatif
+    r'|\b(?:just now|second|minute|hour|day|week|month|year)s?\s+ago\b',  # EN timestamp
+    re.IGNORECASE
+)
+
+def clean_fb_text(text: str) -> str:
+    """Bersihkan noise UI Facebook dari teks post sebelum disimpan ke DB."""
+    cleaned = _FB_UI_RE.sub(' ', text)
+    # Normalkan whitespace berlebih
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
 
 # ─── Extract Functions ─────────────────────────────────
 
@@ -911,9 +952,19 @@ def scrape_groups(groups=None):
 
                     if len(text) < 15:
                         return False
+                    # Bersihkan noise UI FB sebelum filter apapun
+                    text = clean_fb_text(text)
+                    if len(text) < 15:
+                        return False
                     if not contains_keyword(text):
                         return False
+                    if is_rejected_post(text):
+                        return False
                     if is_seeking_post(text):
+                        return False
+                    # Pass 1 DAN Pass 2: wajib ada kata spesifik kos
+                    # (mencegah "sewa gerobak", "kamar mandi", dll lolos)
+                    if not has_kos_specific_word(text) and not has_offering_signal(text):
                         return False
                     # Komentar/post via Pass 2: wajib punya sinyal penawaran
                     if require_offering:
@@ -993,8 +1044,11 @@ def scrape_groups(groups=None):
                     if group_new >= MAX_POSTS_PER_GROUP or total_new >= MAX_POSTS_PER_CYCLE:
                         break
                     try:
-                        # Unpack text untuk cek apakah seeking
+                        # Unpack text untuk cek apakah seeking / rejected
                         text_check = entry[1] if len(entry) >= 2 else ""
+                        text_check = clean_fb_text(text_check)
+                        if is_rejected_post(text_check):
+                            continue
                         if is_seeking_post(text_check) or not contains_keyword(text_check):
                             # Skip tapi catat: seeking post mungkin punya komentar listing
                             # Kita tidak tahu URL-nya dari text saja — gunakan feed_post_urls
