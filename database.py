@@ -112,6 +112,16 @@ def save_post(fb_post_id, raw_text, location, price, contact, image_paths,
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
+        # Cek duplikat via source_url (lebih reliable dari hash konten yang bisa berubah)
+        if source_url:
+            existing = c.execute(
+                "SELECT id FROM posts WHERE source_url = ? AND source_url != ''",
+                (source_url,)
+            ).fetchone()
+            if existing:
+                print(f"⚠️ URL sudah ada (id={existing[0]}), skip: {source_url[-50:]}")
+                return None
+
         c.execute("""
             INSERT INTO posts (fb_post_id, raw_text, location, price, contact, image_paths, source, source_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -164,7 +174,8 @@ def get_pending_posts(source: str = None):
         c.execute("""
             SELECT id, fb_post_id, raw_text, location, price, contact,
                    image_paths, caption, status, created_at, posted_at,
-                   COALESCE(source, 'facebook') as source
+                   COALESCE(source, 'facebook') as source,
+                   COALESCE(cloudinary_urls, '') as cloudinary_urls
             FROM posts WHERE status = 'captioned'
               AND COALESCE(source, 'facebook') = ?
             ORDER BY created_at ASC
@@ -173,7 +184,8 @@ def get_pending_posts(source: str = None):
         c.execute("""
             SELECT id, fb_post_id, raw_text, location, price, contact,
                    image_paths, caption, status, created_at, posted_at,
-                   COALESCE(source, 'facebook') as source
+                   COALESCE(source, 'facebook') as source,
+                   COALESCE(cloudinary_urls, '') as cloudinary_urls
             FROM posts WHERE status = 'captioned' ORDER BY created_at ASC
         """)
     rows = c.fetchall()

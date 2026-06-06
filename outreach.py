@@ -1129,64 +1129,65 @@ def _scan_group_outreach(page, group_url: str) -> int:
     post_info: dict[str, dict] = {}  # url → {name, profile_url}
     for step in range(20):
         time.sleep(random.uniform(1.5, 2.5))
-        new_items = page.evaluate("""
-            () => {
-                function cleanHref(href) {
-                    try {
-                        const u = new URL(href);
-                        if (u.searchParams.has('id'))
-                            return u.origin + u.pathname + '?id=' + u.searchParams.get('id');
-                        return u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
-                    } catch(e) { return href; }
-                }
-                const skipPat = /\\/groups\\/|\\/posts\\/|\\/photos\\/|\\/events\\/|\\/hashtag\\/|\\/watch|\\/reel|login|checkpoint/i;
-                const noisyName = /\\b(?:kos|kost|sewa|kontrakan|info|grup|group)\\b/i;
-                const items = [];
-                document.querySelectorAll('[role="article"]').forEach(art => {
-                    // Cari URL post dari artikel ini
-                    let postUrl = '';
-                    art.querySelectorAll('a[href]').forEach(a => {
-                        if (postUrl) return;
-                        const h = (a.href || '').split('?')[0];
-                        if (/\\/posts\\/\\d+|story_fbid=\\d+|\\/share\\/p\\//.test(h) && h.includes('facebook.com'))
-                            postUrl = h;
-                    });
-                    if (!postUrl) return;
+        try:
+            new_items = page.evaluate("""
+                () => {
+                    function cleanHref(href) {
+                        try {
+                            const u = new URL(href);
+                            if (u.searchParams.has('id'))
+                                return u.origin + u.pathname + '?id=' + u.searchParams.get('id');
+                            return u.origin + u.pathname.replace(/\\/posts.*/, '').replace(/\\?.*/, '');
+                        } catch(e) { return href; }
+                    }
+                    const skipPat = /\\/groups\\/|\\/posts\\/|\\/photos\\/|\\/events\\/|\\/hashtag\\/|\\/watch|\\/reel|login|checkpoint/i;
+                    const noisyName = /\\b(?:kos|kost|sewa|kontrakan|info|grup|group)\\b/i;
+                    const items = [];
+                    document.querySelectorAll('[role="article"]').forEach(art => {
+                        let postUrl = '';
+                        art.querySelectorAll('a[href]').forEach(a => {
+                            if (postUrl) return;
+                            const h = (a.href || '').split('?')[0];
+                            if (/\\/posts\\/\\d+|story_fbid=\\d+|\\/share\\/p\\//.test(h) && h.includes('facebook.com'))
+                                postUrl = h;
+                        });
+                        if (!postUrl) return;
 
-                    // Coba ambil nama dari aria-label artikel
-                    let name = '', profileUrl = '';
-                    const label = art.getAttribute('aria-label') || '';
-                    if (label && !/comment|komentar/i.test(label) && label.length >= 2 && label.length <= 120) {
-                        const stripped = label
-                            .replace(/^Post(?:ingan)?\\s+(?:oleh|by|dari|of)\\s+/i, '')
-                            .replace(/^Foto\\s+(?:oleh|by)\\s+/i, '');
-                        const m = stripped.match(/^(.{2,55}?)(?:\\s+(?:di\\s|in\\s|posted|memposting|berbagi|shared)|$)/i);
-                        if (m) {
-                            const candidate = m[1].trim();
-                            if (!/\\b(?:group|grup|kost?|sewa|kontrakan|facebook|info)\\b/i.test(candidate)
-                                && candidate.length >= 2 && candidate.length <= 55) {
-                                name = candidate;
+                        let name = '', profileUrl = '';
+                        const label = art.getAttribute('aria-label') || '';
+                        if (label && !/comment|komentar/i.test(label) && label.length >= 2 && label.length <= 120) {
+                            const stripped = label
+                                .replace(/^Post(?:ingan)?\\s+(?:oleh|by|dari|of)\\s+/i, '')
+                                .replace(/^Foto\\s+(?:oleh|by)\\s+/i, '');
+                            const m = stripped.match(/^(.{2,55}?)(?:\\s+(?:di\\s|in\\s|posted|memposting|berbagi|shared)|$)/i);
+                            if (m) {
+                                const candidate = m[1].trim();
+                                if (!/\\b(?:group|grup|kost?|sewa|kontrakan|facebook|info)\\b/i.test(candidate)
+                                    && candidate.length >= 2 && candidate.length <= 55) {
+                                    name = candidate;
+                                }
                             }
                         }
-                    }
 
-                    // Ambil profil link dari artikel
-                    for (const a of art.querySelectorAll('a[href]')) {
-                        const h = a.href || '';
-                        if (!h.includes('facebook.com')) continue;
-                        if (skipPat.test(h)) continue;
-                        if (/^https?:\\/\\/(?:www\\.)?facebook\\.com\\/?(?:[#?].*)?$/.test(h)) continue;
-                        const t = (a.innerText || a.textContent || '').trim();
-                        if (!name && t.length >= 2 && t.length <= 50 && !noisyName.test(t)) name = t;
-                        if (!profileUrl) profileUrl = cleanHref(h);
-                        if (name && profileUrl) break;
-                    }
+                        for (const a of art.querySelectorAll('a[href]')) {
+                            const h = a.href || '';
+                            if (!h.includes('facebook.com')) continue;
+                            if (skipPat.test(h)) continue;
+                            if (/^https?:\\/\\/(?:www\\.)?facebook\\.com\\/?(?:[#?].*)?$/.test(h)) continue;
+                            const t = (a.innerText || a.textContent || '').trim();
+                            if (!name && t.length >= 2 && t.length <= 50 && !noisyName.test(t)) name = t;
+                            if (!profileUrl) profileUrl = cleanHref(h);
+                            if (name && profileUrl) break;
+                        }
 
-                    items.push({ url: postUrl, name, profileUrl });
-                });
-                return items;
-            }
-        """)
+                        items.push({ url: postUrl, name, profileUrl });
+                    });
+                    return items;
+                }
+            """)
+        except Exception as _eval_err:
+            print(f"   ⚠️ page.evaluate gagal (step {step}), lanjut scroll: {_eval_err}")
+            new_items = []
         before = len(post_info)
         for item in (new_items or []):
             url = item.get('url', '')
@@ -1198,7 +1199,10 @@ def _scan_group_outreach(page, group_url: str) -> int:
                 post_info[url]['profile_url'] = item.get('profileUrl', '')
         if step >= 10 and len(post_info) == before:
             break
-        page.evaluate("window.scrollBy(0, 2000)")
+        try:
+            page.evaluate("window.scrollBy(0, 2000)")
+        except Exception:
+            pass
 
     post_urls = list(post_info.keys())[:30]
     print(f"   🔎 {len(post_urls)} post ditemukan")

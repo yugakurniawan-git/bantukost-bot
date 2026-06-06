@@ -4,7 +4,7 @@ import datetime
 import threading
 import subprocess
 import schedule
-from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls
+from database import init_db, get_pending_posts, get_stats, save_cloudinary_urls, mark_posted
 from scraper import scrape_groups, get_rotation_batch, extract_location as _clean_location
 from mamikos_scraper import scrape_mamikos
 from caption import process_new_posts
@@ -61,8 +61,9 @@ def _notify_wa(message: str, key: str = "default"):
 def _sync_sheets_background():
     """Sync database ke Google Sheets di background (non-blocking)."""
     try:
+        import sys as _sys
         subprocess.Popen(
-            ["python3", "sync_sheets.py", "all"],
+            [_sys.executable, "sync_sheets.py", "all"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -74,8 +75,9 @@ def _sync_sheets_background():
 def _sync_website_background():
     """Sync listings ke website bantukos.com via GitHub API (non-blocking)."""
     try:
+        import sys as _sys
         subprocess.Popen(
-            ["python3", "sync_website.py"],
+            [_sys.executable, "sync_website.py"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -272,21 +274,29 @@ def _parse_raw_text_for_card(raw_text: str) -> dict:
 
 def _upload_one_post(post) -> bool:
     """Upload satu postingan ke Instagram. Return True kalau berhasil."""
-    post_id         = post[0]
-    location        = _clean_location(post[3] or "")   # re-extract untuk bersihkan nilai lama
-    price           = post[4]
-    image_paths_str = post[6]
-    caption         = post[7]
-    source          = post[11] if len(post) > 11 else "facebook"
+    import sqlite3 as _sqlite3
+    post_id          = post[0]
+    location         = _clean_location(post[3] or "")
+    price            = post[4]
+    image_paths_str  = post[6]
+    caption          = post[7]
+    source           = post[11] if len(post) > 11 else "facebook"
+    cloudinary_saved = post[12] if len(post) > 12 else ""
 
     if not caption:
         print("⚠️ Caption kosong, skip.")
         return False
 
-    # Siapkan foto
-    # dict.fromkeys deduplikasi sambil jaga urutan — cegah carousel dengan slide identik
-    # Filter _wm.jpg: file watermark adalah hasil proses, bukan sumber asli.
-    # Kalau keduanya ada di DB, add_watermark akan buat _wm_wm.jpg (hash beda) → duplikat di IG.
+    # ── Cek apakah sudah punya cloudinary_urls tersimpan ─────────────────
+    # Jika sudah ada, pakai langsung tanpa upload ulang ke Cloudinary
+    existing_cdn = [u.strip() for u in (cloudinary_saved or "").split(",") if u.strip().startswith("http")]
+    if existing_cdn:
+        print(f"   ♻️ Pakai {len(existing_cdn)} cloudinary URL yang sudah ada")
+        caption_with_id = caption + f"\n\n📋 ID: BK-{post_id}"
+        return post_to_instagram(post_id, existing_cdn, caption_with_id)
+
+    # ── Siapkan foto dari lokal ───────────────────────────────────────────
+    # dict.fromkeys: deduplikasi sambil jaga urutan
     image_paths = list(dict.fromkeys(
         p.strip() for p in (image_paths_str or "").split(",")
         if p.strip() and os.path.exists(p.strip()) and "_wm" not in os.path.basename(p.strip())
@@ -307,31 +317,27 @@ def _upload_one_post(post) -> bool:
             post_id    = str(post_id),
         )
         if card_path and os.path.exists(card_path):
-            image_paths = [card_path] + image_paths  # card jadi slide pertama
+            image_paths = [card_path] + image_paths
             print(f"   🃏 Info card dibuat: {os.path.basename(card_path)}")
 
-    # Fallback kalau tidak ada foto sama sekali
+    # ── Tidak ada foto sama sekali → skip, jangan pakai template ─────────
     if not image_paths:
-        print("ℹ️ Tidak ada foto, membuat fallback image...")
-        fallback = create_fallback_image(location or "Bali", price or "Hubungi pemilik")
-        if fallback:
-            image_paths = [fallback]
-
-    if not image_paths:
-        print("⚠️ Tidak ada foto sama sekali, skip post ini.")
+        print(f"   ⏭️ Post BK-{post_id} tidak punya foto — skip (tidak akan pakai template).")
+        conn = _sqlite3.connect(os.path.join("data", "bantukos.db"))
+        conn.execute("UPDATE posts SET status='skipped' WHERE id=?", (post_id,))
+        conn.commit()
+        conn.close()
         return False
 
-    # Upload ke Cloudinary — generate watermark dengan lokasi kalau belum ada
+    # Upload ke Cloudinary
     import hashlib as _hashlib
     public_urls = []
-    seen_upload_hashes = set()  # cegah foto konten sama di-upload dua kali
-    print(f"☁️ Upload {len(image_paths[:5])} foto ke Cloudinary...")
+    seen_upload_hashes = set()
+    print(f"☁️ Upload {min(len(image_paths), 5)} foto ke Cloudinary...")
     for path in image_paths[:5]:
-        # Card dan fallback sudah punya branding bawaan — skip watermark
-        if "card_" in path or "fallback" in os.path.basename(path):
+        if "card_" in path:
             target = path
         else:
-            # Selalu regenerate watermark (jangan pakai cache _wm.jpg lama)
             target = add_watermark(path, location=location or "", price=price or "")
         content_hash = _hashlib.md5(open(target, "rb").read()).hexdigest()
         if content_hash in seen_upload_hashes:
@@ -343,9 +349,13 @@ def _upload_one_post(post) -> bool:
             public_urls.append(url)
             print(f"   ✅ {os.path.basename(target)} → OK")
 
+    if not public_urls:
+        print(f"   ⏭️ Post BK-{post_id} gagal upload semua foto ke Cloudinary — skip.")
+        return False
+
     caption_with_id = caption + f"\n\n📋 ID: BK-{post_id}"
     result = post_to_instagram(post_id, public_urls, caption_with_id)
-    if result is True and public_urls:
+    if result is True:
         save_cloudinary_urls(post_id, public_urls)
     return result
 
