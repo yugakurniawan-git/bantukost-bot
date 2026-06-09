@@ -378,22 +378,26 @@ def run_posting(max_posts: int = 1, source: str = None):
         print(f"ℹ️ Tidak ada postingan siap upload {src_label}.")
         return
 
-    batch = pending if max_posts == -1 else pending[:max_posts]
     src_info = f" [{source}]" if source else ""
-    print(f"📋 {len(pending)} post siap{src_info}, akan upload {len(batch)} sekarang")
+    print(f"📋 {len(pending)} post siap{src_info}, target upload {max_posts if max_posts != -1 else 'semua'}")
 
     uploaded = 0
-    for i, post in enumerate(batch):
+    tried = 0
+    # Iterasi seluruh antrian sampai max_posts berhasil diupload (bukan hanya dicoba)
+    for post in pending:
+        if max_posts != -1 and uploaded >= max_posts:
+            break
+        tried += 1
         src_tag = post[11] if len(post) > 11 else "?"
-        print(f"\n[{i+1}/{len(batch)}] Post ID {post[0]} [{src_tag}] — {post[3][:35]}")
+        print(f"\n[{tried}] Post ID {post[0]} [{src_tag}] — {post[3][:35]}")
         result = _upload_one_post(post)
         if result is True:
             uploaded += 1
+            if uploaded < max_posts:
+                time.sleep(5)
         elif result is None:
             print("⏳ Rate limit — menghentikan siklus posting, akan retry di siklus berikutnya.")
             break
-        if i < len(batch) - 1:
-            time.sleep(5)
 
     print(f"\n✅ Selesai: {uploaded}/{len(batch)} berhasil diupload")
     if uploaded > 0:
