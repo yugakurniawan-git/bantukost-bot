@@ -399,7 +399,7 @@ def run_posting(max_posts: int = 1, source: str = None):
             print("⏳ Rate limit — menghentikan siklus posting, akan retry di siklus berikutnya.")
             break
 
-    print(f"\n✅ Selesai: {uploaded}/{len(batch)} berhasil diupload")
+    print(f"\n✅ Selesai: {uploaded}/{tried} dicoba, {uploaded} berhasil diupload")
     if uploaded > 0:
         _sync_sheets_background()
         _sync_website_background()
